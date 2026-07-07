@@ -10,6 +10,7 @@ import {
   type DailyReportRow,
   type TodayDailyReport
 } from "../api/dailyReport";
+import AppSelect from "../components/AppSelect";
 import { notify } from "../utils/notify";
 
 const DAILY_TYPE_HOT = 1;
@@ -397,13 +398,7 @@ export default function DailyHotPage() {
             <button type="button" disabled={loading || (pages > 0 && pageNum >= pages)} onClick={() => setPageNum((value) => value + 1)}>
               下一页
             </button>
-            <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-              {[10, 20, 50].map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
+            <AppSelect value={pageSize} options={[10, 20, 50].map((value) => ({ value, label: String(value) }))} onChange={setPageSize} />
           </div>
         </aside>
       </div>

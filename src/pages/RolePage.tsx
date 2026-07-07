@@ -1,7 +1,8 @@
 import { Loader2, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import AppSelect from "../components/AppSelect";
 import AttributeTreeSelector, { type AttributeTreeNode } from "../components/AttributeTreeSelector";
-import { deleteReq, getReq, postReq } from "../utils/request";
+import { deleteReq, getReq, postReq, putReq } from "../utils/request";
 import { notify } from "../utils/notify";
 
 type RoleRow = {
@@ -126,6 +127,7 @@ export default function RolePage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"add" | "edit">("add");
   const [form, setForm] = useState<RoleForm>(emptyForm);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [permissionRows, setPermissionRows] = useState<PermissionRow[]>([]);
   const [checkedPermissionIds, setCheckedPermissionIds] = useState<Array<string | number>>([]);
@@ -168,6 +170,7 @@ export default function RolePage() {
   const openAdd = async () => {
     setFormMode("add");
     setForm(emptyForm);
+    setFormErrors({});
     setCheckedPermissionIds([]);
     await loadPermissions();
     setFormOpen(true);
@@ -181,6 +184,7 @@ export default function RolePage() {
       description: String(row.description || ""),
       status: statusToBool(row.status)
     });
+    setFormErrors({});
     setCheckedPermissionIds([]);
     await loadPermissions();
     const resp = await getReq(`/check/role/permits-role-id/${row.id}`);
@@ -190,9 +194,20 @@ export default function RolePage() {
     }
   };
 
+  const updateForm = <K extends keyof RoleForm>(key: K, value: RoleForm[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (formErrors[key]) {
+      setFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
   const submitForm = async () => {
     if (!form.name.trim()) {
-      notify({ type: "warning", title: "角色名称不能为空" });
+      setFormErrors({ name: "请填写角色名称" });
       return;
     }
     if (!checkedPermissionIds.length) {
@@ -222,7 +237,7 @@ export default function RolePage() {
   const updateStatus = async (row: RoleRow, checked: boolean) => {
     setLoading(true);
     try {
-      const resp = await postReq(`/check/role/update-status/${row.id}/${checked ? 1 : 0}`);
+      const resp = await putReq(`/check/role/update-status/${row.id}/${checked ? 1 : 0}`);
       if (resp.code === 0 || resp.code === undefined) {
         notify({ type: "success", title: "状态已更新", message: String(row.name || row.id) });
         await loadRoles();
@@ -289,15 +304,15 @@ export default function RolePage() {
           ) : rows.length ? (
             rows.map((row) => (
               <div className="role-row" key={String(row.id)}>
-                <span title={valueText(row.name)}>{valueText(row.name)}</span>
-                <span title={valueText(row.description)}>{valueText(row.description)}</span>
+                <span>{valueText(row.name)}</span>
+                <span>{valueText(row.description)}</span>
                 <span>
                   <button className={`table-switch ${statusToBool(row.status) ? "is-on" : ""}`} type="button" onClick={() => void updateStatus(row, !statusToBool(row.status))}>
                     <span />
                   </button>
                 </span>
-                <span title={formatDate(row.createTime)}>{formatDate(row.createTime)}</span>
-                <span title={formatDate(row.updateTime)}>{formatDate(row.updateTime)}</span>
+                <span>{formatDate(row.createTime)}</span>
+                <span>{formatDate(row.updateTime)}</span>
                 <span className="table-actions">
                   <button type="button" onClick={() => void openEdit(row)}>
                     <Pencil size={15} />
@@ -325,13 +340,7 @@ export default function RolePage() {
           <button type="button" disabled={loading || rows.length < pageSize} onClick={() => setPageNum((value) => value + 1)}>
             下一页
           </button>
-          <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-            {[10, 20, 50, 100].map((value) => (
-              <option key={value} value={value}>
-                {value} / 页
-              </option>
-            ))}
-          </select>
+          <AppSelect value={pageSize} options={[10, 20, 50, 100].map((value) => ({ value, label: `${value} / 页` }))} onChange={setPageSize} />
         </div>
       </section>
 
@@ -346,17 +355,18 @@ export default function RolePage() {
             </header>
             <div className="role-form">
               <div className="role-base-form">
-                <label>
-                  <span>角色名称 *</span>
-                  <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+                <label className={formErrors.name ? "has-error" : ""}>
+                  <span>角色名称 <em>*</em></span>
+                  <input value={form.name} onChange={(event) => updateForm("name", event.target.value)} />
+                  {formErrors.name ? <small>{formErrors.name}</small> : null}
                 </label>
                 <label>
                   <span>描述</span>
-                  <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+                  <input value={form.description} onChange={(event) => updateForm("description", event.target.value)} />
                 </label>
                 <label className="role-status-field">
                   <span>状态</span>
-                  <button className={`table-switch ${form.status ? "is-on" : ""}`} type="button" onClick={() => setForm({ ...form, status: !form.status })}>
+                  <button className={`table-switch ${form.status ? "is-on" : ""}`} type="button" onClick={() => updateForm("status", !form.status)}>
                     <span />
                   </button>
                 </label>

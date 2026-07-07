@@ -1,5 +1,7 @@
-import { AlertTriangle, Copy, Eye, FileJson, Loader2, RefreshCw, Search, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Copy, Eye, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import AppSelect from "../components/AppSelect";
+import JsonViewer from "../components/JsonViewer";
 import { notify } from "../utils/notify";
 import { postReq } from "../utils/request";
 
@@ -87,6 +89,24 @@ function hasContent(content: unknown) {
   return text !== "-";
 }
 
+function parseJsonContent(content: unknown) {
+  if (content && typeof content === "object") return content;
+  if (typeof content !== "string") return null;
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function LogJsonBlock({ content, className }: { content: unknown; className?: string }) {
+  const parsed = parseJsonContent(content);
+  if (parsed) return <JsonViewer value={parsed} />;
+  return <pre className={className}>{prettyContent(content)}</pre>;
+}
+
 export default function LogPage() {
   const [rows, setRows] = useState<LogRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -135,7 +155,6 @@ export default function LogPage() {
     }
   };
 
-  const currentDetailText = useMemo(() => (detail ? prettyContent(detail.content) : ""), [detail]);
   const rawError = detail?.row ? exceptionOf(detail.row) : "";
 
   return (
@@ -180,26 +199,18 @@ export default function LogPage() {
               const errorContent = exceptionOf(row);
               return (
                 <div className={`log-row ${hasContent(errorContent) ? "has-error" : ""}`} key={String(row.id ?? index)}>
-                  <span className="cell-ellipsis" title={valueText(row.username)}>{valueText(row.username)}</span>
-                  <span className="cell-ellipsis" title={valueText(row.method)}>
+                  <span className="cell-ellipsis">{valueText(row.username)}</span>
+                  <span className="cell-ellipsis">
                     <em className="log-method-tag">{valueText(row.method)}</em>
                   </span>
-                  <span className="log-preview" title={preview(row.params, 180)}>{preview(row.params)}</span>
+                  <span className="log-preview">{preview(row.params)}</span>
                   <span>{formatCost(row.time)}</span>
-                  <span className="cell-ellipsis" title={valueText(row.ip)}>{valueText(row.ip)}</span>
-                  <span className="log-date" title={formatDate(row.createTime)}>{formatDate(row.createTime)}</span>
+                  <span className="cell-ellipsis">{valueText(row.ip)}</span>
+                  <span className="log-date">{formatDate(row.createTime)}</span>
                   <span className="table-actions log-actions">
-                    <button type="button" disabled={!hasContent(row.params)} onClick={() => setDetail({ title: "请求参数", subtitle: `${valueText(row.username)} · ${formatDate(row.createTime)}`, content: row.params })}>
-                      <FileJson size={15} />
-                      参数
-                    </button>
-                    <button className={hasContent(errorContent) ? "text-danger" : ""} type="button" disabled={!hasContent(errorContent)} onClick={() => setDetail({ title: "异常信息", subtitle: `${valueText(row.username)} · ${formatDate(row.createTime)}`, content: errorContent })}>
-                      <AlertTriangle size={15} />
-                      异常
-                    </button>
-                    <button type="button" onClick={() => setDetail({ title: "原始记录", subtitle: `${valueText(row.username)} · ${formatDate(row.createTime)}`, content: row, row, variant: "raw" })}>
+                    <button type="button" onClick={() => setDetail({ title: "详情", subtitle: `${valueText(row.username)} · ${formatDate(row.createTime)}`, content: row, row, variant: "raw" })}>
                       <Eye size={15} />
-                      原始
+                      详情
                     </button>
                   </span>
                 </div>
@@ -220,13 +231,7 @@ export default function LogPage() {
           <button type="button" disabled={loading || rows.length < pageSize} onClick={() => setPageNum((value) => value + 1)}>
             下一页
           </button>
-          <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-            {[20, 50, 100, 200].map((value) => (
-              <option key={value} value={value}>
-                {value} / 页
-              </option>
-            ))}
-          </select>
+          <AppSelect value={pageSize} options={[20, 50, 100, 200].map((value) => ({ value, label: `${value} / 页` }))} onChange={setPageSize} />
         </div>
       </section>
 
@@ -253,21 +258,21 @@ export default function LogPage() {
                 </div>
                 <section>
                   <h4>请求参数</h4>
-                  <pre>{prettyContent(detail.row.params)}</pre>
+                  <LogJsonBlock content={detail.row.params} />
                 </section>
                 {hasContent(rawError) ? (
                   <section className="log-raw-error">
                     <h4>异常信息</h4>
-                    <pre>{prettyContent(rawError)}</pre>
+                    <LogJsonBlock content={rawError} />
                   </section>
                 ) : null}
                 <section>
                   <h4>完整原始记录</h4>
-                  <pre>{currentDetailText}</pre>
+                  <LogJsonBlock content={detail.row} />
                 </section>
               </div>
             ) : (
-              <pre className="log-detail-content">{currentDetailText}</pre>
+              <LogJsonBlock content={detail.content} className="log-detail-content" />
             )}
             <footer className="modal-actions log-modal-actions">
               <button type="button" onClick={() => void copyDetail()}>

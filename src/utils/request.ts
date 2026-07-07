@@ -11,7 +11,6 @@ export type ApiResponse<T = unknown> = {
 
 const service = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "",
-  timeout: 30000,
   withCredentials: true
 });
 
@@ -55,6 +54,10 @@ service.interceptors.response.use(
 
 export function postReq<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) {
   return service.post<ApiResponse<T>>(url, data, config).then((response) => response.data);
+}
+
+export function putReq<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) {
+  return service.put<ApiResponse<T>>(url, data, config).then((response) => response.data);
 }
 
 export function getReq<T = unknown>(url: string, params?: unknown, config?: AxiosRequestConfig) {

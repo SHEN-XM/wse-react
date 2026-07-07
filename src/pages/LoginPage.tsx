@@ -19,6 +19,15 @@ export default function LoginPage() {
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const canGetCaptcha = username.trim().length > 0;
+
+  const validateUsername = () => {
+    const next: Record<string, string> = {};
+    if (!username.trim()) next.username = "请输入账号";
+    else if (username.trim().length < 3) next.username = "账号至少 3 个字符";
+    setErrors((prev) => ({ ...prev, ...next }));
+    return Object.keys(next).length === 0;
+  };
 
   const validateBase = () => {
     const next: Record<string, string> = {};
@@ -31,7 +40,7 @@ export default function LoginPage() {
   };
 
   const refreshCaptcha = async () => {
-    if (!validateBase()) return;
+    if (!validateUsername()) return;
     setLoading(true);
     try {
       const resp = await getCaptcha(username.trim());
@@ -51,12 +60,13 @@ export default function LoginPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!validateBase()) return;
     if (!captchaUrl) {
+      if (!validateUsername()) return;
       await refreshCaptcha();
-      notify({ type: "info", title: "请输入验证码", message: "验证码已生成，填写后再次登录" });
+      if (canGetCaptcha) notify({ type: "info", title: "请输入验证码", message: "验证码已生成，填写后再次登录" });
       return;
     }
+    if (!validateBase()) return;
     if (!captcha.trim()) {
       setErrors((prev) => ({ ...prev, captcha: "请输入验证码" }));
       notify({ type: "warning", title: "验证码不能为空" });
@@ -86,10 +96,8 @@ export default function LoginPage() {
     <main className="login-page">
       <section className="login-panel">
         <div className="login-brand">
-          <div className="brand-mark">WSE</div>
           <div>
-            <h1>后台管理</h1>
-            <p>沿用原后台账号体系与接口权限</p>
+            <h1>写作后台情报局</h1>
           </div>
         </div>
 
@@ -126,7 +134,7 @@ export default function LoginPage() {
                 type={visible ? "text" : "password"}
                 autoComplete="current-password"
               />
-              <button className="ghost-icon" type="button" onClick={() => setVisible((value) => !value)} title={visible ? "隐藏密码" : "显示密码"}>
+              <button className="ghost-icon" type="button" onClick={() => setVisible((value) => !value)}>
                 {visible ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
             </div>
@@ -148,17 +156,17 @@ export default function LoginPage() {
                     autoComplete="off"
                   />
                 </div>
-                <button className="captcha-image-button" type="button" onClick={refreshCaptcha} title="点击刷新验证码">
+                <button className="captcha-image-button" type="button" onClick={refreshCaptcha}>
                   <img src={captchaUrl} alt="验证码" />
                 </button>
-                <button className="captcha-refresh-button" type="button" onClick={refreshCaptcha} title="刷新验证码">
+                <button className="captcha-refresh-button" type="button" onClick={refreshCaptcha}>
                   <RefreshCw size={16} />
                 </button>
               </div>
               {errors.captcha && <em className="field-error">{errors.captcha}</em>}
             </label>
           )}
-          <button className="login-button" type="submit" disabled={loading}>
+          <button className="login-button" type="submit" disabled={loading || (!captchaUrl && !canGetCaptcha)}>
             {loading ? <Loader2 className="spin" size={18} /> : null}
             {captchaUrl ? "登录" : "获取验证码"}
           </button>

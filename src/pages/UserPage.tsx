@@ -1,5 +1,6 @@
 import { KeyRound, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import AppSelect from "../components/AppSelect";
 import RoleTransferSelector, { type RoleTransferItem } from "../components/RoleTransferSelector";
 import { getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
@@ -75,6 +76,7 @@ export default function UserPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"add" | "edit">("add");
   const [form, setForm] = useState<UserForm>(emptyForm);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [roleOpen, setRoleOpen] = useState(false);
   const [roleUser, setRoleUser] = useState<UserRow | null>(null);
@@ -111,6 +113,7 @@ export default function UserPage() {
   const openAdd = () => {
     setFormMode("add");
     setForm(emptyForm);
+    setFormErrors({});
     setFormOpen(true);
   };
 
@@ -124,16 +127,27 @@ export default function UserPage() {
       phone: String(row.phone || ""),
       email: String(row.email || "")
     });
+    setFormErrors({});
     setFormOpen(true);
   };
 
-  const submitForm = async () => {
-    if (!form.username.trim()) {
-      notify({ type: "warning", title: "账号不能为空" });
-      return;
+  const updateForm = <K extends keyof UserForm>(key: K, value: UserForm[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (formErrors[key]) {
+      setFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
-    if (formMode === "add" && !form.password.trim()) {
-      notify({ type: "warning", title: "密码不能为空" });
+  };
+
+  const submitForm = async () => {
+    const nextErrors: Record<string, string> = {};
+    if (!form.username.trim()) nextErrors.username = "请填写账号";
+    if (formMode === "add" && !form.password.trim()) nextErrors.password = "请填写密码";
+    setFormErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
       return;
     }
     setSaving(true);
@@ -268,17 +282,17 @@ export default function UserPage() {
           ) : rows.length ? (
             rows.map((row) => (
               <div className="user-row" key={String(row.id)}>
-                <span title={text(row.username)}>{text(row.username)}</span>
-                <span title={text(row.nickName)}>{text(row.nickName)}</span>
-                <span title={text(row.email)}>{text(row.email)}</span>
-                <span title={text(row.phone)}>{text(row.phone)}</span>
+                <span>{text(row.username)}</span>
+                <span>{text(row.nickName)}</span>
+                <span>{text(row.email)}</span>
+                <span>{text(row.phone)}</span>
                 <span>
                   <button className={`table-switch ${statusToBool(row.status) ? "is-on" : ""}`} type="button" onClick={() => void updateStatus(row, !statusToBool(row.status))}>
                     <span />
                   </button>
                 </span>
-                <span title={formatDate(row.createTime)}>{formatDate(row.createTime)}</span>
-                <span title={formatDate(row.updateTime)}>{formatDate(row.updateTime)}</span>
+                <span>{formatDate(row.createTime)}</span>
+                <span>{formatDate(row.updateTime)}</span>
                 <span className="table-actions">
                   <button type="button" onClick={() => void openRoleConfig(row)}>
                     <ShieldCheck size={15} />
@@ -314,13 +328,7 @@ export default function UserPage() {
           <button type="button" disabled={loading || rows.length < pageSize} onClick={() => setPageNum((value) => value + 1)}>
             下一页
           </button>
-          <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-            {[10, 20, 50, 100].map((value) => (
-              <option key={value} value={value}>
-                {value} / 页
-              </option>
-            ))}
-          </select>
+          <AppSelect value={pageSize} options={[10, 20, 50, 100].map((value) => ({ value, label: `${value} / 页` }))} onChange={setPageSize} />
         </div>
       </section>
 
@@ -334,27 +342,29 @@ export default function UserPage() {
               </button>
             </header>
             <div className="user-form">
-              <label>
-                <span>账号 *</span>
-                <input disabled={formMode === "edit"} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} />
+              <label className={formErrors.username ? "has-error" : ""}>
+                <span>账号 <em>*</em></span>
+                <input disabled={formMode === "edit"} value={form.username} onChange={(event) => updateForm("username", event.target.value)} />
+                {formErrors.username ? <small>{formErrors.username}</small> : null}
               </label>
               {formMode === "add" ? (
-                <label>
-                  <span>密码 *</span>
-                  <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
+                <label className={formErrors.password ? "has-error" : ""}>
+                  <span>密码 <em>*</em></span>
+                  <input type="password" value={form.password} onChange={(event) => updateForm("password", event.target.value)} />
+                  {formErrors.password ? <small>{formErrors.password}</small> : null}
                 </label>
               ) : null}
               <label>
                 <span>昵称</span>
-                <input value={form.nickName} onChange={(event) => setForm({ ...form, nickName: event.target.value })} />
+                <input value={form.nickName} onChange={(event) => updateForm("nickName", event.target.value)} />
               </label>
               <label>
                 <span>手机号</span>
-                <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
+                <input value={form.phone} onChange={(event) => updateForm("phone", event.target.value)} />
               </label>
               <label>
                 <span>邮箱</span>
-                <input value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+                <input value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
               </label>
             </div>
             <footer className="modal-actions">

@@ -13,10 +13,8 @@ import {
   MessageSquareText,
   Network,
   ShieldCheck,
-  Smile,
   Sparkles,
   SquareLibrary,
-  TestTube2,
   User,
   UsersRound,
   Waypoints
@@ -122,14 +120,6 @@ const accountStatusOptions: FieldOption[] = [
   { label: "取消", value: 5 }
 ];
 
-const accountStatusEnum: Record<string, EnumValue> = {
-  "1": { label: "待审核", color: "orange" },
-  "2": { label: "通过", color: "green" },
-  "3": { label: "驳回", color: "red" },
-  "4": { label: "已邀请", color: "blue" },
-  "5": "取消"
-};
-
 const userTypeOptions: FieldOption[] = [
   { label: "普通用户", value: 1 },
   { label: "创作者", value: 2 },
@@ -228,13 +218,12 @@ export const menuGroups: MenuGroup[] = [
         description: "处理用户注册、创作者申请与账号开通流程。",
         hideOverview: true,
         columns: [
-          { key: "email", title: "邮箱", width: 200 },
-          { key: "status", title: "申请状态", type: "enum", enumMap: accountStatusEnum },
+          { key: "email", title: "邮箱" },
           { key: "reason", title: "申请理由" },
-          { key: "reviewRemark", title: "审核备注" },
+          { key: "reviewRemark", title: "审核备注", width: 100},
           { key: "applyIp", title: "申请 IP" },
-          { key: "reviewTime", title: "审核时间", type: "date" },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "reviewTime", title: "审核时间", width: 220, type: "date" },
+          { key: "createTime", title: "创建时间", width: 220, type: "date" }
         ],
         formFields: [
           { key: "email", label: "邮箱" },
@@ -259,67 +248,12 @@ export const menuGroups: MenuGroup[] = [
     icon: Database,
     children: [
       {
-        key: "bullet-screen",
-        label: "弹幕管理",
-        icon: MessageSquareText,
-        path: "/danmu",
-        description: "查看弹幕内容、过滤状态与异常词命中。",
-        columns: [
-          { key: "name", title: "主播", width: 300 },
-          { key: "roomId", title: "房间号", width: 200 },
-          { key: "createTime", title: "创建时间", type: "date" }
-        ],
-        searchFields: [{ key: "roomId", placeholder: "请输入房间号" }],
-        actions: [
-          { label: "清洗弹幕", api: "/check/dy/danmu/clean" },
-          { label: "删除全部", api: "/check/dy/danmu/delete/all", confirm: "确认删除全部弹幕数据？" }
-        ],
-        api: { page: "/check/dy/danmu/page" }
-      },
-      {
         key: "collection",
         label: "数据采集",
         icon: FileText,
         path: "/data",
-        description: "管理外部数据采集任务和入库状态。",
-        columns: [
-          { key: "roomId", title: "直播间号" },
-          { key: "name", title: "直播间" },
-          { key: "status", title: "状态" },
-          { key: "createTime", title: "创建时间", type: "date" }
-        ],
-        searchFields: [{ key: "roomId", placeholder: "请输入直播间号" }],
-        actions: [
-          { label: "刷新采集状态", api: "/check/dy/danmu/list", method: "get" },
-          { label: "开始采集", api: "/check/dy/danmu" },
-          { label: "停止采集", api: "/check/dy/danmu/close" }
-        ],
-        api: { page: "/check/dy/danmu/page" }
-      },
-      {
-        key: "fans",
-        label: "粉丝管理",
-        icon: Smile,
-        path: "/fans",
-        description: "分析粉丝增长、互动和活跃度。",
-        columns: [
-          { key: "dyIcon", title: "头像" },
-          { key: "dyName", title: "名称" },
-          { key: "dyCoins", title: "存票" },
-          { key: "dyExp", title: "消费" },
-          { key: "introduction", title: "简介" },
-          { key: "dyNum", title: "账号" },
-          { key: "createId", title: "创建人" }
-        ],
-        formFields: [
-          { key: "dyName", label: "名称" },
-          { key: "dyNum", label: "账号", required: false },
-          { key: "introduction", label: "简介", type: "textarea", rows: 4, required: false },
-          { key: "dyCoins", label: "存票", type: "number", required: false },
-          { key: "dyExp", label: "消费", type: "number", required: false }
-        ],
-        searchFields: [{ key: "dyName", placeholder: "请输入名称" }],
-        api: { page: "/check/fans/page", add: "/check/fans/add", update: "/check/fans/update", delete: "/check/fans/delete" }
+        description: "选择直播间并管理实时采集状态。",
+        hideOverview: true
       },
       {
         key: "hot-words",
@@ -344,6 +278,7 @@ export const menuGroups: MenuGroup[] = [
         icon: SquareLibrary,
         path: "/prompt",
         description: "管理业务提示词、模型模板与版本状态。",
+        hideOverview: true,
         columns: [
           { key: "type", title: "类型", type: "enum", enumMap: promptTypeEnum },
           { key: "label", title: "标签" },
@@ -381,10 +316,10 @@ export const menuGroups: MenuGroup[] = [
       },
       {
         key: "ai-text",
-        label: "AI文本采集",
+        label: "文本分析",
         icon: Bot,
         path: "/ai-text",
-        description: "执行 AI 文本采集、检测基准和分析指标任务。",
+        description: "执行文本分析、检测基准和分析指标任务。",
         columns: [
           { key: "id", title: "任务ID" },
           { key: "taskCode", title: "任务编号" },
@@ -609,35 +544,8 @@ export const menuGroups: MenuGroup[] = [
         label: "文件管理",
         icon: FileText,
         path: "/file",
-        description: "管理上传文件、COS对象和存储引用。",
-        columns: [
-          { key: "username", title: "用户名" },
-          { key: "method", title: "请求方法" },
-          { key: "params", title: "请求参数" },
-          { key: "execption", title: "异常信息" },
-          { key: "time", title: "响应时间" },
-          { key: "ip", title: "IP地址" },
-          { key: "createTime", title: "创建时间", type: "date" }
-        ],
-        searchFields: [
-          { key: "username", placeholder: "搜索用户名" },
-          { key: "execption", placeholder: "搜索异常信息" }
-        ],
-        api: { page: "/check/file/page" }
-      },
-      {
-        key: "test",
-        label: "测试页面",
-        icon: TestTube2,
-        path: "/test",
-        description: "用于验证接口、组件和后台页面状态。",
-        columns: [
-          { key: "id", title: "步骤" },
-          { key: "name", title: "名称" },
-          { key: "content", title: "内容" }
-        ],
-        api: { page: "/check/log/page" },
-        searchPlaceholder: "搜索接口"
+        description: "按后端文件上传业务上传普通文件和视频文件。",
+        hideOverview: true
       }
     ]
   }

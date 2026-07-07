@@ -10,8 +10,11 @@ import {
   uploadRecord,
   type PagePayload
 } from "../api/admin";
+import AppSelect from "../components/AppSelect";
+import CrudForm from "../components/CrudForm";
 import { menuLeaves, type FormField, type ImportAction, type TableColumn, type ToolbarAction } from "../data/menu";
 import { notify } from "../utils/notify";
+import { buildTableLayout } from "../utils/tableLayout";
 
 type Props = {
   menuKey: string;
@@ -85,12 +88,6 @@ function payloadFromValues(values: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== "" && value !== undefined && value !== null));
 }
 
-function fieldClassName(field: FormField) {
-  if (field.layout === "wide") return "wide";
-  if (field.layout === "half") return "";
-  return field.type === "textarea" ? "wide" : "";
-}
-
 function isSwitchOn(value: unknown) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
@@ -111,24 +108,23 @@ export default function ModulePage({ menuKey }: Props) {
   const [formMode, setFormMode] = useState<"add" | "edit">("add");
   const [editingRow, setEditingRow] = useState<Record<string, unknown> | null>(null);
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [importAction, setImportAction] = useState<ImportAction | null>(null);
   const [importValues, setImportValues] = useState<Record<string, unknown>>({});
   const [importFile, setImportFile] = useState<File | null>(null);
 
   const columns = useMemo(() => buildColumns(rows, activeItem.columns), [rows, activeItem.columns]);
   const hasRowActions = Boolean(activeItem.api?.update || activeItem.api?.delete);
-  const gridTemplateColumns = useMemo(() => {
-    const flexibleCount = columns.filter((column) => !column.width).length;
-    const dataColumns = columns
-      .map((column, index) => {
-        const width = column.width || 150;
-        if (!column.width) return `minmax(${width}px, 1fr)`;
-        if (!flexibleCount && index === columns.length - 1 && !hasRowActions) return `minmax(${width}px, 1fr)`;
-        return `minmax(${width}px, ${width}px)`;
-      })
-      .join(" ");
-    return `${dataColumns || "minmax(150px, 1fr)"}${hasRowActions ? " minmax(220px, 260px)" : ""}`;
-  }, [columns, hasRowActions]);
+  const tableGridStyle = useMemo(() => {
+    const layout = buildTableLayout({
+      columns,
+      rows,
+      minWidth: 980,
+      actionWidth: hasRowActions ? 220 : 0,
+      expandLastFixedColumn: true
+    });
+    return { gridTemplateColumns: layout.gridTemplateColumns, minWidth: layout.minWidth };
+  }, [columns, hasRowActions, rows]);
 
   const formFields = activeItem.formFields || [];
   const searchFields = activeItem.searchFields || [];
@@ -218,11 +214,18 @@ export default function ModulePage({ menuKey }: Props) {
     setFormMode(mode);
     setEditingRow(row || null);
     setFormValues(initialForm(formFields, row));
+    setFormErrors({});
     setFormOpen(true);
   };
 
   const submitForm = async () => {
-    const missing = formFields.find((field) => field.required !== false && !formValues[field.key]);
+    const nextErrors = Object.fromEntries(
+      formFields
+        .filter((field) => field.required !== false && !String(formValues[field.key] ?? "").trim())
+        .map((field) => [field.key, `请填写${field.label}`])
+    );
+    setFormErrors(nextErrors);
+    const missing = formFields.find((field) => nextErrors[field.key]);
     if (missing) {
       notify({ type: "warning", title: "请完善表单", message: missing.label });
       return;
@@ -308,20 +311,26 @@ export default function ModulePage({ menuKey }: Props) {
 
   const renderField = (field: FormField, values: Record<string, unknown>, setValues: (next: Record<string, unknown>) => void) => {
     const value = values[field.key] ?? "";
-    const update = (nextValue: unknown) => setValues({ ...values, [field.key]: nextValue });
+    const update = (nextValue: unknown) => {
+      setValues({ ...values, [field.key]: nextValue });
+      if (formErrors[field.key]) {
+        setFormErrors((prev) => {
+          const next = { ...prev };
+          delete next[field.key];
+          return next;
+        });
+      }
+    };
     if (field.type === "textarea") {
       return <textarea rows={field.rows || 4} value={String(value)} onChange={(event) => update(event.target.value)} />;
     }
     if (field.type === "select") {
       return (
-        <select value={String(value)} onChange={(event) => update(event.target.value)}>
-          <option value="">请选择</option>
-          {(field.options || []).map((option) => (
-            <option key={String(option.value)} value={String(option.value)}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        <AppSelect
+          value={String(value)}
+          options={[{ value: "", label: "请选择" }, ...(field.options || []).map((option) => ({ value: String(option.value), label: option.label }))]}
+          onChange={update}
+        />
       );
     }
     if (field.type === "switch") {
@@ -360,14 +369,11 @@ export default function ModulePage({ menuKey }: Props) {
               <label className="table-search" key={field.key}>
                 <Search size={16} />
                 {field.type === "select" ? (
-                  <select value={String(searchValues[field.key] ?? "")} onChange={(event) => setSearchValues({ ...searchValues, [field.key]: event.target.value })}>
-                    <option value="">{field.placeholder}</option>
-                    {(field.options || []).map((option) => (
-                      <option key={String(option.value)} value={String(option.value)}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <AppSelect
+                    value={String(searchValues[field.key] ?? "")}
+                    options={[{ value: "", label: field.placeholder || "全部" }, ...(field.options || []).map((option) => ({ value: String(option.value), label: option.label }))]}
+                    onChange={(value) => setSearchValues({ ...searchValues, [field.key]: value })}
+                  />
                 ) : (
                   <input value={String(searchValues[field.key] ?? "")} onChange={(event) => setSearchValues({ ...searchValues, [field.key]: event.target.value })} onKeyDown={(event) => event.key === "Enter" && runSearch()} placeholder={field.placeholder} />
                 )}
@@ -407,7 +413,7 @@ export default function ModulePage({ menuKey }: Props) {
         </div>
 
         <div className="admin-table real-table">
-          <div className="table-head" style={{ gridTemplateColumns }}>
+          <div className="table-head" style={tableGridStyle}>
             {columns.length ? columns.map((column) => <span key={column.key}>{column.title}</span>) : <span>数据</span>}
             {hasRowActions && <span>操作</span>}
           </div>
@@ -420,7 +426,7 @@ export default function ModulePage({ menuKey }: Props) {
           {!loading && !rows.length && <div className="table-empty">{message || "暂无数据"}</div>}
           {!loading &&
             rows.map((row, index) => (
-              <div className="table-row" key={String(row.id ?? index)} style={{ gridTemplateColumns }}>
+              <div className="table-row" key={String(row.id ?? index)} style={tableGridStyle}>
                 {columns.map((column) =>
                   column.type === "switch" ? (
                     <span className="cell-ellipsis" key={column.key}>
@@ -435,7 +441,7 @@ export default function ModulePage({ menuKey }: Props) {
                       </button>
                     </span>
                   ) : (
-                    <span className="cell-ellipsis" key={column.key} title={formatColumnCell(column, row[column.key])}>
+                    <span className="cell-ellipsis" key={column.key}>
                       {formatColumnCell(column, row[column.key])}
                     </span>
                   )
@@ -470,13 +476,7 @@ export default function ModulePage({ menuKey }: Props) {
           <button type="button" disabled={loading || rows.length < pageSize} onClick={() => setPageNum((value) => value + 1)}>
             下一页
           </button>
-          <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-            {[10, 20, 50, 100].map((value) => (
-              <option key={value} value={value}>
-                {value} / 页
-              </option>
-            ))}
-          </select>
+          <AppSelect value={pageSize} options={[10, 20, 50, 100].map((value) => ({ value, label: `${value} / 页` }))} onChange={setPageSize} />
         </div>
       </section>
 
@@ -489,17 +489,7 @@ export default function ModulePage({ menuKey }: Props) {
                 <X size={16} />
               </button>
             </header>
-            <div className="crud-form">
-              {formFields.map((field) => (
-                <label className={fieldClassName(field)} key={field.key}>
-                  <span>
-                    {field.label}
-                    {field.required === false ? "" : " *"}
-                  </span>
-                  {renderField(field, formValues, setFormValues)}
-                </label>
-              ))}
-            </div>
+            <CrudForm fields={formFields} values={formValues} errors={formErrors} onChange={setFormValues} renderField={renderField} />
             <footer className="confirm-actions">
               <button type="button" onClick={() => setFormOpen(false)} disabled={loading}>
                 取消

@@ -42,7 +42,7 @@ export default function ToastProvider({ children }: PropsWithChildren) {
                 <strong>{item.title}</strong>
                 {item.message && <p>{item.message}</p>}
               </div>
-              <button type="button" onClick={() => setItems((prev) => prev.filter((toast) => toast.id !== item.id))} title="关闭">
+              <button type="button" onClick={() => setItems((prev) => prev.filter((toast) => toast.id !== item.id))}>
                 <X size={15} />
               </button>
             </div>

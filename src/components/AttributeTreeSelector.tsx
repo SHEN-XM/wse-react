@@ -114,7 +114,7 @@ export default function AttributeTreeSelector({ nodes, checkedIds, onChange, typ
                 <button className={`attribute-check ${state.partial ? "is-partial" : ""}`} type="button" onClick={() => toggleChecked(node)} aria-pressed={state.checked}>
                   <span />
                 </button>
-                <strong title={node.title}>{node.title}</strong>
+                <strong>{node.title}</strong>
                 {node.type !== undefined && node.type !== null ? <em>{typeLabel ? typeLabel(node.type) : String(node.type)}</em> : null}
               </div>
             );

@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Loader2, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import AppSelect from "../components/AppSelect";
 import SegmentedControl from "../components/SegmentedControl";
 import { deleteReq, getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
@@ -158,7 +159,7 @@ function collectIds(rows: PermissionRow[]) {
 function IconPreview({ icon }: { icon?: string }) {
   if (!icon) return <span className="muted-text">-</span>;
   return (
-    <span className="permission-icon-preview" title={icon}>
+    <span className="permission-icon-preview">
       <svg aria-hidden="true">
         <use href={`#${icon}`} />
       </svg>
@@ -175,6 +176,7 @@ export default function PermissionPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"add" | "edit">("add");
   const [form, setForm] = useState<PermissionForm>(emptyForm);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   const treeRows = useMemo(() => buildTree(rows), [rows]);
@@ -202,17 +204,18 @@ export default function PermissionPage() {
     document.body.appendChild(script);
   }, []);
 
-  const loadRows = async () => {
-    setLoading(true);
+  const loadRows = async (options: { silent?: boolean; resetExpanded?: boolean } = {}) => {
+    const { silent = false, resetExpanded = true } = options;
+    if (!silent) setLoading(true);
     try {
       const resp = await getReq("/check/permission/list");
       if (resp.code === 0 || resp.code === undefined) {
         const list = normalizeArray(resp.data);
         setRows(list);
-        setExpanded(new Set());
+        if (resetExpanded) setExpanded(new Set());
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -231,6 +234,7 @@ export default function PermissionPage() {
   const openAdd = (parent?: PermissionRow) => {
     setFormMode("add");
     setForm({ ...emptyForm, pid: parent ? String(parent.id) : selectedId || "0", type: parent && Number(parent.type) >= 2 ? 3 : 1 });
+    setFormErrors({});
     setFormOpen(true);
   };
 
@@ -249,34 +253,44 @@ export default function PermissionPage() {
       menuCode: String(row.menuCode || ""),
       orderNum: Number(row.orderNum || 0)
     });
+    setFormErrors({});
     setFormOpen(true);
+  };
+
+  const updateForm = <K extends keyof PermissionForm>(key: K, value: PermissionForm[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (formErrors[key]) {
+      setFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
   };
 
   const removeRow = async (row: PermissionRow) => {
     if (!window.confirm(`确定删除「${row.title || row.id}」吗？子权限也可能受到影响。`)) return;
-    setLoading(true);
-    try {
-      const resp = await deleteReq(`/check/permission/delete/${row.id}`);
-      if (resp.code === 0 || resp.code === undefined) {
-        notify({ type: "success", title: "删除成功", message: String(row.title || row.id) });
-        await loadRows();
-      }
-    } finally {
-      setLoading(false);
+    const resp = await deleteReq(`/check/permission/delete/${row.id}`);
+    if (resp.code === 0 || resp.code === undefined) {
+      notify({ type: "success", title: "删除成功", message: String(row.title || row.id) });
+      if (selectedId === String(row.id)) setSelectedId("");
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.delete(String(row.id));
+        return next;
+      });
+      await loadRows({ silent: true, resetExpanded: false });
     }
   };
 
   const submitForm = async () => {
-    if (!form.title.trim()) {
-      notify({ type: "warning", title: "菜单名称不能为空" });
-      return;
-    }
-    if (!form.pid && form.pid !== "0") {
-      notify({ type: "warning", title: "请选择所属菜单" });
-      return;
-    }
-    if (form.type === 3 && (!form.permissionCode.trim() || !form.menuCode.trim())) {
-      notify({ type: "warning", title: "请完善按钮权限", message: "授权标识、按钮标识不能为空" });
+    const nextErrors: Record<string, string> = {};
+    if (!form.pid && form.pid !== "0") nextErrors.pid = "请选择所属菜单";
+    if (!form.title.trim()) nextErrors.title = "请填写菜单名称";
+    if (form.type === 3 && !form.permissionCode.trim()) nextErrors.permissionCode = "请填写授权标识";
+    if (form.type === 3 && !form.menuCode.trim()) nextErrors.menuCode = "请填写按钮标识";
+    setFormErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
       return;
     }
 
@@ -294,8 +308,11 @@ export default function PermissionPage() {
       const resp = await postReq(formMode === "add" ? "/check/permission/add" : "/check/permission/update", payload);
       if (resp.code === 0 || resp.code === undefined) {
         notify({ type: "success", title: formMode === "add" ? "新增成功" : "保存成功", message: form.title });
+        if (form.pid && form.pid !== "0") {
+          setExpanded((prev) => new Set(prev).add(String(form.pid)));
+        }
         setFormOpen(false);
-        await loadRows();
+        await loadRows({ silent: true, resetExpanded: false });
       }
     } finally {
       setSaving(false);
@@ -359,17 +376,17 @@ export default function PermissionPage() {
                     ) : (
                       <i className="permission-spacer" />
                     )}
-                    <strong title={valueText(row.title)}>{valueText(row.title)}</strong>
+                    <strong>{valueText(row.title)}</strong>
                   </span>
                   <span><IconPreview icon={row.icon} /></span>
                   <span><PermissionTag kind="type" value={row.type} /></span>
-                  <span title={valueText(row.path)}>{valueText(row.path)}</span>
+                  <span>{valueText(row.path)}</span>
                   <span><PermissionTag kind="method" value={row.method} /></span>
                   <span><PermissionTag kind="code" value={row.permissionCode} /></span>
                   <span><PermissionTag kind="code" value={row.menuCode} /></span>
                   <span><PermissionTag kind="name" value={row.name} /></span>
                   <span>{valueText(row.orderNum)}</span>
-                  <span title={formatDate(row.createTime)}>{formatDate(row.createTime)}</span>
+                  <span>{formatDate(row.createTime)}</span>
                   <span className="table-actions" onClick={(event) => event.stopPropagation()}>
                     {Number(row.type) !== 3 ? (
                       <button type="button" onClick={() => openAdd(row)}>
@@ -406,65 +423,69 @@ export default function PermissionPage() {
             </header>
             <div className="crud-form permission-form">
               <label>
-                <span>菜单类型 *</span>
-                <SegmentedControl value={form.type} options={permissionTypeOptions} onChange={(type) => setForm({ ...form, type })} />
+                <span>菜单类型 <em>*</em></span>
+                <SegmentedControl value={form.type} options={permissionTypeOptions} onChange={(type) => updateForm("type", type)} />
               </label>
-              <label>
-                <span>菜单名称 *</span>
-                <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
+              <label className={formErrors.pid ? "has-error" : ""}>
+                <span>所属菜单 <em>*</em></span>
+                <AppSelect
+                  value={form.pid}
+                  options={[
+                    { value: "0", label: "根菜单" },
+                    ...parentOptions
+                      .filter((item) => String(item.id) !== String(form.id ?? ""))
+                      .map((item) => ({
+                        value: String(item.id),
+                        label: `${"|--".repeat(item.level + 1)} ${item.title || item.path || item.id}`
+                      }))
+                  ]}
+                  menuClassName="permission-parent-menu"
+                  maxMenuHeight={460}
+                  onChange={(pid) => updateForm("pid", pid)}
+                />
+                {formErrors.pid ? <small>{formErrors.pid}</small> : null}
               </label>
-              <label>
-                <span>所属菜单 *</span>
-                <select value={form.pid} onChange={(event) => setForm({ ...form, pid: event.target.value })}>
-                  <option value="0">根菜单</option>
-                  {parentOptions
-                    .filter((item) => String(item.id) !== String(form.id ?? ""))
-                    .map((item) => (
-                      <option key={String(item.id)} value={String(item.id)}>
-                        {"|--".repeat(item.level + 1)} {item.title || item.path || item.id}
-                      </option>
-                    ))}
-                </select>
+              <label className={formErrors.title ? "has-error" : ""}>
+                <span>菜单名称 <em>*</em></span>
+                <input value={form.title} onChange={(event) => updateForm("title", event.target.value)} />
+                {formErrors.title ? <small>{formErrors.title}</small> : null}
               </label>
               <label>
                 <span>{form.type === 3 ? "接口路径" : "页面路径"}</span>
-                <input value={form.path} onChange={(event) => setForm({ ...form, path: event.target.value })} />
+                <input value={form.path} onChange={(event) => updateForm("path", event.target.value)} />
               </label>
               {form.type !== 3 ? (
                 <>
                   <label>
                     <span>图标</span>
-                    <input value={form.icon} onChange={(event) => setForm({ ...form, icon: event.target.value })} />
+                    <input value={form.icon} onChange={(event) => updateForm("icon", event.target.value)} />
                   </label>
                   <label>
                     <span>路由名称</span>
-                    <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+                    <input value={form.name} onChange={(event) => updateForm("name", event.target.value)} />
                   </label>
                 </>
               ) : (
                 <>
-                  <label>
-                    <span>授权标识 *</span>
-                    <input value={form.permissionCode} onChange={(event) => setForm({ ...form, permissionCode: event.target.value })} />
+                  <label className={formErrors.permissionCode ? "has-error" : ""}>
+                    <span>授权标识 <em>*</em></span>
+                    <input value={form.permissionCode} onChange={(event) => updateForm("permissionCode", event.target.value)} />
+                    {formErrors.permissionCode ? <small>{formErrors.permissionCode}</small> : null}
                   </label>
                   <label>
                     <span>请求方式</span>
-                    <select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}>
-                      <option value="">请选择</option>
-                      {methodList.map((method) => (
-                        <option key={method} value={method}>{method}</option>
-                      ))}
-                    </select>
+                    <AppSelect value={form.method} options={[{ value: "", label: "请选择" }, ...methodList.map((method) => ({ value: method, label: method }))]} onChange={(method) => updateForm("method", method)} />
                   </label>
-                  <label>
-                    <span>按钮标识 *</span>
-                    <input value={form.menuCode} onChange={(event) => setForm({ ...form, menuCode: event.target.value })} />
+                  <label className={formErrors.menuCode ? "has-error" : ""}>
+                    <span>按钮标识 <em>*</em></span>
+                    <input value={form.menuCode} onChange={(event) => updateForm("menuCode", event.target.value)} />
+                    {formErrors.menuCode ? <small>{formErrors.menuCode}</small> : null}
                   </label>
                 </>
               )}
               <label>
                 <span>排序</span>
-                <input type="number" value={form.orderNum} onChange={(event) => setForm({ ...form, orderNum: Number(event.target.value) })} />
+                <input type="number" value={form.orderNum} onChange={(event) => updateForm("orderNum", Number(event.target.value))} />
               </label>
             </div>
             <footer className="modal-actions">

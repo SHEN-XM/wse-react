@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Loader2, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import AppSelect from "../components/AppSelect";
 import { deleteReq, getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
 
@@ -112,6 +113,7 @@ export default function DictionaryPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"add" | "edit">("add");
   const [form, setForm] = useState<DictionaryForm>(emptyForm);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   const treeRows = useMemo(() => buildTree(rows), [rows]);
@@ -129,17 +131,18 @@ export default function DictionaryPage() {
   const displayRows = useMemo(() => flattenTree(filteredTree, visibleExpanded), [filteredTree, visibleExpanded]);
   const parentOptions = useMemo(() => flattenOptions(treeRows), [treeRows]);
 
-  const loadRows = async () => {
-    setLoading(true);
+  const loadRows = async (options: { silent?: boolean; resetExpanded?: boolean } = {}) => {
+    const { silent = false, resetExpanded = true } = options;
+    if (!silent) setLoading(true);
     try {
       const resp = await getReq("/check/dic/list");
       if (resp.code === 0 || resp.code === undefined) {
         const list = normalizeArray(resp.data);
         setRows(list);
-        setExpanded(new Set());
+        if (resetExpanded) setExpanded(new Set());
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -150,6 +153,7 @@ export default function DictionaryPage() {
   const openAdd = () => {
     setFormMode("add");
     setForm({ ...emptyForm, parentId: selectedId || "0" });
+    setFormErrors({});
     setFormOpen(true);
   };
 
@@ -165,16 +169,29 @@ export default function DictionaryPage() {
       description: String(row.description || ""),
       orderNum: Number(row.orderNum || 0)
     });
+    setFormErrors({});
     setFormOpen(true);
   };
 
-  const submitForm = async () => {
-    if (!form.parentId) {
-      notify({ type: "warning", title: "请选择父级字典" });
-      return;
+  const updateForm = <K extends keyof DictionaryForm>(key: K, value: DictionaryForm[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (formErrors[key]) {
+      setFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
-    if (!form.nameZh.trim() || !form.nameEn.trim() || !form.code.trim()) {
-      notify({ type: "warning", title: "请完善字典信息", message: "中文名、英文名、代码不能为空" });
+  };
+
+  const submitForm = async () => {
+    const nextErrors: Record<string, string> = {};
+    if (!form.parentId) nextErrors.parentId = "请选择父级字典";
+    if (!form.nameZh.trim()) nextErrors.nameZh = "请填写中文名";
+    if (!form.nameEn.trim()) nextErrors.nameEn = "请填写英文名";
+    if (!form.code.trim()) nextErrors.code = "请填写代码";
+    setFormErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
       return;
     }
     setSaving(true);
@@ -183,8 +200,11 @@ export default function DictionaryPage() {
       const resp = await postReq(formMode === "add" ? "/check/dic/add" : "/check/dic/update", payload);
       if (resp.code === 0 || resp.code === undefined) {
         notify({ type: "success", title: formMode === "add" ? "新增成功" : "保存成功", message: form.nameZh });
+        if (form.parentId && form.parentId !== "0") {
+          setExpanded((prev) => new Set(prev).add(String(form.parentId)));
+        }
         setFormOpen(false);
-        await loadRows();
+        await loadRows({ silent: true, resetExpanded: false });
       }
     } finally {
       setSaving(false);
@@ -193,15 +213,16 @@ export default function DictionaryPage() {
 
   const removeRow = async (row: DictionaryRow) => {
     if (!window.confirm(`确定删除「${row.nameZh || row.code || row.id}」吗？`)) return;
-    setLoading(true);
-    try {
-      const resp = await deleteReq(`/check/dic/delete/${row.id}`);
-      if (resp.code === 0 || resp.code === undefined) {
-        notify({ type: "success", title: "删除成功", message: String(row.nameZh || row.code || row.id) });
-        await loadRows();
-      }
-    } finally {
-      setLoading(false);
+    const resp = await deleteReq(`/check/dic/delete/${row.id}`);
+    if (resp.code === 0 || resp.code === undefined) {
+      notify({ type: "success", title: "删除成功", message: String(row.nameZh || row.code || row.id) });
+      if (selectedId === String(row.id)) setSelectedId("");
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.delete(String(row.id));
+        return next;
+      });
+      await loadRows({ silent: true, resetExpanded: false });
     }
   };
 
@@ -267,10 +288,10 @@ export default function DictionaryPage() {
                     )}
                     <strong>{formatValue(row.nameZh)}</strong>
                   </span>
-                  <span title={formatValue(row.nameEn)}>{formatValue(row.nameEn)}</span>
+                  <span>{formatValue(row.nameEn)}</span>
                   <span>{formatValue(row.value)}</span>
-                  <span title={formatValue(row.code)}>{formatValue(row.code)}</span>
-                  <span title={formatValue(row.description)}>{formatValue(row.description)}</span>
+                  <span>{formatValue(row.code)}</span>
+                  <span>{formatValue(row.description)}</span>
                   <span className="table-actions" onClick={(event) => event.stopPropagation()}>
                     <button type="button" onClick={() => openEdit(row)}>
                       <Pencil size={15} />
@@ -300,42 +321,49 @@ export default function DictionaryPage() {
               </button>
             </header>
             <div className="crud-form dictionary-form">
-              <label>
-                <span>父级字典 *</span>
-                <select value={form.parentId} onChange={(event) => setForm({ ...form, parentId: event.target.value })}>
-                  <option value="0">根字典</option>
-                  {parentOptions
-                    .filter((item) => String(item.id) !== String(form.id ?? ""))
-                    .map((item) => (
-                      <option key={String(item.id)} value={String(item.id)}>
-                        {"|--".repeat(item.level + 1)} {item.nameZh || item.code}
-                      </option>
-                    ))}
-                </select>
+              <label className={formErrors.parentId ? "has-error" : ""}>
+                <span>父级字典 <em>*</em></span>
+                <AppSelect
+                  value={form.parentId}
+                  options={[
+                    { value: "0", label: "根字典" },
+                    ...parentOptions
+                      .filter((item) => String(item.id) !== String(form.id ?? ""))
+                      .map((item) => ({
+                        value: String(item.id),
+                        label: `${"|--".repeat(item.level + 1)} ${item.nameZh || item.code}`
+                      }))
+                  ]}
+                  onChange={(parentId) => updateForm("parentId", parentId)}
+                />
+                {formErrors.parentId ? <small>{formErrors.parentId}</small> : null}
               </label>
-              <label>
-                <span>中文名 *</span>
-                <input value={form.nameZh} onChange={(event) => setForm({ ...form, nameZh: event.target.value })} />
+              <label className={formErrors.nameZh ? "has-error" : ""}>
+                <span>中文名 <em>*</em></span>
+                <input value={form.nameZh} onChange={(event) => updateForm("nameZh", event.target.value)} />
+                {formErrors.nameZh ? <small>{formErrors.nameZh}</small> : null}
               </label>
-              <label>
-                <span>英文名 *</span>
-                <input value={form.nameEn} onChange={(event) => setForm({ ...form, nameEn: event.target.value })} />
+              <label className={formErrors.nameEn ? "has-error" : ""}>
+                <span>英文名 <em>*</em></span>
+                <input value={form.nameEn} onChange={(event) => updateForm("nameEn", event.target.value)} />
+                {formErrors.nameEn ? <small>{formErrors.nameEn}</small> : null}
               </label>
-              <label>
-                <span>代码 *</span>
-                <input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} />
+              <label className={formErrors.code ? "has-error" : ""}>
+                <span>代码 <em>*</em></span>
+                <input value={form.code} onChange={(event) => updateForm("code", event.target.value)} />
+                {formErrors.code ? <small>{formErrors.code}</small> : null}
               </label>
               <label>
                 <span>值</span>
-                <input type="number" value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} />
+                <input type="number" value={form.value} onChange={(event) => updateForm("value", event.target.value)} />
               </label>
               <label>
                 <span>排序</span>
-                <input type="number" value={form.orderNum} onChange={(event) => setForm({ ...form, orderNum: Number(event.target.value) })} />
+                <input type="number" value={form.orderNum} onChange={(event) => updateForm("orderNum", Number(event.target.value))} />
               </label>
               <label className="wide">
                 <span>描述</span>
-                <textarea rows={4} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+                <textarea rows={4} value={form.description} onChange={(event) => updateForm("description", event.target.value)} />
               </label>
             </div>
             <footer className="modal-actions">

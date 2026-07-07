@@ -1,8 +1,10 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import AdminShell from "../components/AdminShell";
 import { menuLeaves } from "../data/menu";
+import DataCollectionPage from "../pages/DataCollectionPage";
 import DailyHotPage from "../pages/DailyHotPage";
 import DictionaryPage from "../pages/DictionaryPage";
+import FilePage from "../pages/FilePage";
 import AiTextPage from "../pages/AiTextPage";
 import HotWordsPage from "../pages/HotWordsPage";
 import LogPage from "../pages/LogPage";
@@ -35,6 +37,8 @@ export const router = createBrowserRouter([
                 <HotWordsPage />
               ) : item.key === "ai-text" ? (
                 <AiTextPage />
+              ) : item.key === "collection" ? (
+                <DataCollectionPage />
               ) : item.key === "dictionary" ? (
                 <DictionaryPage />
               ) : item.key === "permission" ? (
@@ -45,6 +49,8 @@ export const router = createBrowserRouter([
                 <UserPage />
               ) : item.key === "logs" ? (
                 <LogPage />
+              ) : item.key === "files" ? (
+                <FilePage />
               ) : (
                 <ModulePage menuKey={item.key} />
               )

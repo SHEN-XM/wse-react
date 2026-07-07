@@ -1,5 +1,6 @@
 import { Download, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import AppSelect from "../components/AppSelect";
 import { postReq } from "../utils/request";
 import { notify } from "../utils/notify";
 
@@ -47,7 +48,7 @@ function fontSizeAt(index: number, total: number) {
 
 export default function HotWordsPage() {
   const [topN, setTopN] = useState(200);
-  const [type, setType] = useState(1);
+  const [type, setType] = useState(2);
   const [words, setWords] = useState<HotWord[]>([]);
   const [loading, setLoading] = useState(false);
   const cloudRef = useRef<HTMLDivElement | null>(null);
@@ -120,20 +121,8 @@ export default function HotWordsPage() {
     <section className="workspace hot-words-page">
       <section className="hot-control-panel">
         <div className="hot-controls">
-          <select value={topN} onChange={(event) => setTopN(Number(event.target.value))}>
-            {countOptions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-          <select value={type} onChange={(event) => setType(Number(event.target.value))}>
-            {typeOptions.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+          <AppSelect value={topN} options={countOptions.map((item) => ({ value: item, label: String(item) }))} onChange={setTopN} />
+          <AppSelect value={type} options={typeOptions} onChange={setType} />
           <button type="button" onClick={fetchHotWords} disabled={loading}>
             {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             刷新
@@ -165,7 +154,6 @@ export default function HotWordsPage() {
                     backgroundColor: `${color}12`,
                     fontSize: fontSizeAt(index, sortedWords.length)
                   }}
-                  title={`${word.label}：${word.value}`}
                 >
                   {word.label}
                 </span>
