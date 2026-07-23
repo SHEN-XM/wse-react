@@ -4,6 +4,8 @@ import AppSelect from "../components/AppSelect";
 import RoleTransferSelector, { type RoleTransferItem } from "../components/RoleTransferSelector";
 import { getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
+import { formatAppDateTime } from "../utils/dateFormat";
+import { confirmAction } from "../utils/confirm";
 
 type UserRow = {
   id: string | number;
@@ -57,11 +59,20 @@ function text(value: unknown) {
 }
 
 function formatDate(value: unknown) {
-  if (!value) return "-";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (num: number) => String(num).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatAppDateTime(value);
+}
+
+function roleLevel(value: unknown) {
+  const level = Number(value || 1);
+  return Number.isFinite(level) && level > 0 ? level : 1;
+}
+
+function sortRoles(list: RoleTransferItem[]) {
+  return [...list].sort((a, b) => {
+    const levelDiff = roleLevel(b.level) - roleLevel(a.level);
+    if (levelDiff !== 0) return levelDiff;
+    return a.name.localeCompare(b.name, "zh-Hans-CN");
+  });
 }
 
 export default function UserPage() {
@@ -190,7 +201,13 @@ export default function UserPage() {
   };
 
   const removeUser = async (row: UserRow) => {
-    if (!window.confirm(`确定删除用户「${row.username || row.id}」吗？`)) return;
+    const confirmed = await confirmAction({
+      title: "确认删除用户",
+      message: `将删除用户「${row.username || row.id}」，此操作不可撤销。`,
+      confirmText: "确认删除",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setLoading(true);
     try {
       const resp = await postReq("/check/user/delete", [row.id]);
@@ -204,7 +221,12 @@ export default function UserPage() {
   };
 
   const resetPassword = async (row: UserRow) => {
-    if (!window.confirm(`确定重置「${row.username || row.id}」的密码吗？`)) return;
+    const confirmed = await confirmAction({
+      title: "确认重置密码",
+      message: `将重置「${row.username || row.id}」的登录密码。`,
+      confirmText: "确认重置"
+    });
+    if (!confirmed) return;
     const resp = await getReq(`/check/user/reset/${row.id}`);
     if (resp.code === 0 || resp.code === undefined) {
       notify({ type: "success", title: "密码已重置", message: `新密码为 ${String(resp.data || "")}` });
@@ -217,8 +239,8 @@ export default function UserPage() {
     setSelectedRoleIds([]);
     const resp = await getReq(`/check/user/role-info/${row.id}`);
     if (resp.code === 0 || resp.code === undefined) {
-      const data = (resp.data || {}) as { allRole?: Array<{ id: string | number; name: string; status?: number | boolean }>; ownRoleIds?: Array<string | number> };
-      setRoles((data.allRole || []).map((item) => ({ id: item.id, name: item.name, disabled: item.status === 0 || item.status === false })));
+      const data = (resp.data || {}) as { allRole?: Array<{ id: string | number; name: string; level?: number | string; status?: number | boolean }>; ownRoleIds?: Array<string | number> };
+      setRoles(sortRoles((data.allRole || []).map((item) => ({ id: item.id, name: item.name, level: item.level, disabled: item.status === 0 || item.status === false }))));
       setSelectedRoleIds(data.ownRoleIds || []);
       setRoleOpen(true);
     }

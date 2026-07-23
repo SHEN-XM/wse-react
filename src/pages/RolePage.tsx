@@ -4,11 +4,14 @@ import AppSelect from "../components/AppSelect";
 import AttributeTreeSelector, { type AttributeTreeNode } from "../components/AttributeTreeSelector";
 import { deleteReq, getReq, postReq, putReq } from "../utils/request";
 import { notify } from "../utils/notify";
+import { formatAppDateTime } from "../utils/dateFormat";
+import { confirmAction } from "../utils/confirm";
 
 type RoleRow = {
   id: string | number;
   name?: string;
   description?: string;
+  level?: number | string;
   status?: boolean | number | string;
   createTime?: string;
   updateTime?: string;
@@ -27,6 +30,7 @@ type RoleForm = {
   id?: string | number | null;
   name: string;
   description: string;
+  level: number;
   status: boolean;
 };
 
@@ -34,6 +38,7 @@ const emptyForm: RoleForm = {
   id: null,
   name: "",
   description: "",
+  level: 1,
   status: true
 };
 
@@ -65,16 +70,25 @@ function statusToBool(value: RoleRow["status"]) {
 }
 
 function formatDate(value: unknown) {
-  if (!value) return "-";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (num: number) => String(num).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatAppDateTime(value);
 }
 
 function valueText(value: unknown) {
   if (value === null || value === undefined || value === "") return "-";
   return String(value);
+}
+
+function normalizeRoleLevel(value: RoleRow["level"]) {
+  const level = Number(value || 1);
+  return Number.isFinite(level) && level > 0 ? level : 1;
+}
+
+function sortRoleRows(list: RoleRow[]) {
+  return [...list].sort((a, b) => {
+    const levelDiff = normalizeRoleLevel(b.level) - normalizeRoleLevel(a.level);
+    if (levelDiff !== 0) return levelDiff;
+    return String(a.name || "").localeCompare(String(b.name || ""), "zh-Hans-CN");
+  });
 }
 
 function flattenInput(rows: PermissionRow[]): PermissionRow[] {
@@ -138,11 +152,11 @@ export default function RolePage() {
     setLoading(true);
     try {
       const payload: Record<string, unknown> = { pageNum, pageSize };
-      if (keyword.trim()) payload.name = keyword.trim();
+      if (keyword.trim()) payload.roleName = keyword.trim();
       const resp = await postReq("/check/role/page", payload);
       if (resp.code === 0 || resp.code === undefined) {
         const page = normalizePage(resp.data);
-        setRows(page.list.map((row) => ({ ...row, status: statusToBool(row.status) })));
+        setRows(sortRoleRows(page.list.map((row) => ({ ...row, status: statusToBool(row.status) }))));
         setTotal(page.total);
         setSize(page.size);
       }
@@ -182,6 +196,7 @@ export default function RolePage() {
       id: row.id,
       name: String(row.name || ""),
       description: String(row.description || ""),
+      level: Math.max(1, Number(row.level || 1)),
       status: statusToBool(row.status)
     });
     setFormErrors({});
@@ -220,6 +235,7 @@ export default function RolePage() {
         id: form.id,
         name: form.name.trim(),
         description: form.description.trim(),
+        level: Math.max(1, Number(form.level || 1)),
         status: form.status ? 1 : 0,
         permissionsIds: checkedPermissionIds
       };
@@ -248,7 +264,13 @@ export default function RolePage() {
   };
 
   const removeRole = async (row: RoleRow) => {
-    if (!window.confirm(`确定删除角色「${row.name || row.id}」吗？`)) return;
+    const confirmed = await confirmAction({
+      title: "确认删除角色",
+      message: `将删除角色「${row.name || row.id}」，此操作不可撤销。`,
+      confirmText: "确认删除",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setLoading(true);
     try {
       const resp = await deleteReq(`/check/role/delete/${row.id}`);
@@ -291,6 +313,7 @@ export default function RolePage() {
           <div className="role-row role-head">
             <span>角色名称</span>
             <span>描述</span>
+            <span>级别</span>
             <span>状态</span>
             <span>创建时间</span>
             <span>更新时间</span>
@@ -306,6 +329,7 @@ export default function RolePage() {
               <div className="role-row" key={String(row.id)}>
                 <span>{valueText(row.name)}</span>
                 <span>{valueText(row.description)}</span>
+                <span>{valueText(row.level || 1)}</span>
                 <span>
                   <button className={`table-switch ${statusToBool(row.status) ? "is-on" : ""}`} type="button" onClick={() => void updateStatus(row, !statusToBool(row.status))}>
                     <span />
@@ -363,6 +387,10 @@ export default function RolePage() {
                 <label>
                   <span>描述</span>
                   <input value={form.description} onChange={(event) => updateForm("description", event.target.value)} />
+                </label>
+                <label>
+                  <span>级别</span>
+                  <input min={1} step={1} type="number" value={form.level} onChange={(event) => updateForm("level", Math.max(1, Number(event.target.value || 1)))} />
                 </label>
                 <label className="role-status-field">
                   <span>状态</span>

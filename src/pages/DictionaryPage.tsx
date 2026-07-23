@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import AppSelect from "../components/AppSelect";
 import { deleteReq, getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
+import { confirmAction } from "../utils/confirm";
 
 type DictionaryRow = {
   id: string | number;
@@ -212,7 +213,13 @@ export default function DictionaryPage() {
   };
 
   const removeRow = async (row: DictionaryRow) => {
-    if (!window.confirm(`确定删除「${row.nameZh || row.code || row.id}」吗？`)) return;
+    const confirmed = await confirmAction({
+      title: "确认删除字典",
+      message: `将删除「${row.nameZh || row.code || row.id}」，此操作不可撤销。`,
+      confirmText: "确认删除",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     const resp = await deleteReq(`/check/dic/delete/${row.id}`);
     if (resp.code === 0 || resp.code === undefined) {
       notify({ type: "success", title: "删除成功", message: String(row.nameZh || row.code || row.id) });

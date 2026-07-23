@@ -14,7 +14,9 @@ import AppSelect from "../components/AppSelect";
 import CrudForm from "../components/CrudForm";
 import { menuLeaves, type FormField, type ImportAction, type TableColumn, type ToolbarAction } from "../data/menu";
 import { notify } from "../utils/notify";
+import { formatAppDateTime } from "../utils/dateFormat";
 import { buildTableLayout } from "../utils/tableLayout";
+import { confirmAction } from "../utils/confirm";
 
 type Props = {
   menuKey: string;
@@ -44,17 +46,19 @@ const fallbackStatusText: Record<string, string> = {
   "2": "删除",
   "3": "屏蔽"
 };
+const dateColumnKeys = new Set(["createTime", "updateTime", "createdAt", "updatedAt", "reviewTime", "startedAt", "completedAt"]);
 
 function formatCell(value: unknown) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "object") return JSON.stringify(value);
   if (typeof value === "number") return String(value);
   const text = String(value);
-  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return text.replace("T", " ").slice(0, 19);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return formatAppDateTime(text);
   return text;
 }
 
 function formatColumnCell(column: TableColumn, value: unknown) {
+  if (column.type === "date" || dateColumnKeys.has(column.key)) return formatAppDateTime(value);
   if (column.type === "enum" && column.enumMap) {
     const mapped = column.enumMap[String(value ?? "")];
     if (mapped) return typeof mapped === "string" ? mapped : mapped.label;
@@ -113,7 +117,13 @@ export default function ModulePage({ menuKey }: Props) {
   const [importValues, setImportValues] = useState<Record<string, unknown>>({});
   const [importFile, setImportFile] = useState<File | null>(null);
 
-  const columns = useMemo(() => buildColumns(rows, activeItem.columns), [rows, activeItem.columns]);
+  const columns = useMemo(
+    () =>
+      buildColumns(rows, activeItem.columns).map((column) =>
+        column.type === "date" || dateColumnKeys.has(column.key) ? { ...column, width: 180 } : column
+      ),
+    [rows, activeItem.columns]
+  );
   const hasRowActions = Boolean(activeItem.api?.update || activeItem.api?.delete);
   const tableGridStyle = useMemo(() => {
     const layout = buildTableLayout({
@@ -195,7 +205,15 @@ export default function ModulePage({ menuKey }: Props) {
   const handleToolAction = async (action: Pick<ToolbarAction, "api" | "label" | "method" | "confirm">) => {
     const { api: endpoint, label, method, confirm } = action;
     if (!endpoint) return;
-    if (confirm && !window.confirm(confirm)) return;
+    if (confirm) {
+      const confirmed = await confirmAction({
+        title: `确认${label}`,
+        message: confirm,
+        confirmText: "确认",
+        tone: /删除|清空|撤回/.test(label + confirm) ? "danger" : "default"
+      });
+      if (!confirmed) return;
+    }
     setLoading(true);
     try {
       const resp = await runAction(endpoint, payloadFromValues(searchValues), method);
@@ -370,6 +388,8 @@ export default function ModulePage({ menuKey }: Props) {
                 <Search size={16} />
                 {field.type === "select" ? (
                   <AppSelect
+                    className="table-filter-select"
+                    triggerClassName="table-filter-select-trigger"
                     value={String(searchValues[field.key] ?? "")}
                     options={[{ value: "", label: field.placeholder || "全部" }, ...(field.options || []).map((option) => ({ value: String(option.value), label: option.label }))]}
                     onChange={(value) => setSearchValues({ ...searchValues, [field.key]: value })}

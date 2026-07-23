@@ -1,38 +1,41 @@
 ﻿import * as d3 from "d3";
-import { Bot, Loader2, Maximize2, Minimize2, RefreshCw, Search, Upload, WandSparkles, X } from "lucide-react";
+import { Bot, Loader2, Maximize2, Minimize2, Plus, RefreshCw, Search, Upload, WandSparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { normalizeRows, uploadRecord } from "../api/admin";
-import AppSelect from "../components/AppSelect";
+import AppSelect, { type SelectOption } from "../components/AppSelect";
 import FileUploadField from "../components/FileUploadField";
 import JsonViewer from "../components/JsonViewer";
 import LoadingState from "../components/LoadingState";
 import { postReq } from "../utils/request";
 import { notify } from "../utils/notify";
 import { buildTableLayout } from "../utils/tableLayout";
+import { formatAppDateTime } from "../utils/dateFormat";
+import { confirmAction } from "../utils/confirm";
 
 type Row = Record<string, unknown>;
+type ModelOption = SelectOption<string>;
 
 type Column = {
   key: string;
   title: string;
+  header?: React.ReactNode;
   width?: number;
   render?: (row: Row) => React.ReactNode;
 };
 
 type DatasetKey =
   | "word"
+  | "detectionWord"
+  | "sensitiveWord"
   | "pattern"
   | "feature"
+  | "baseline"
   | "corpus"
   | "paragraph"
   | "runs"
   | "sentences"
-  | "metrics"
   | "observations"
-  | "experiments"
-  | "lexicons"
-  | "embeddings"
-  | "duplicates";
+  | "lexicons";
 
 type MainTab = "tasks" | DatasetKey | "dashboard" | "visualization";
 
@@ -43,6 +46,7 @@ type DatasetConfig = {
   columns: Column[];
   search: Array<{ key: string; label: string; placeholder?: string; type?: "input" | "select"; options?: Array<{ label: string; value: string | number }> }>;
   split?: Array<{ key: string; title: string; endpoint: string; columns: Column[]; search?: DatasetConfig["search"] }>;
+  toolbarExtra?: React.ReactNode;
 };
 
 type PageState = {
@@ -62,18 +66,17 @@ type DataState = {
 const tabs: Array<{ key: MainTab; label: string }> = [
   { key: "tasks", label: "任务" },
   { key: "word", label: "词汇" },
+  { key: "detectionWord", label: "检测词汇" },
+  { key: "sensitiveWord", label: "违规词" },
   { key: "pattern", label: "句式" },
   { key: "feature", label: "特征" },
   { key: "corpus", label: "语料" },
   { key: "paragraph", label: "段落" },
   { key: "runs", label: "分析运行" },
   { key: "sentences", label: "句子" },
-  { key: "metrics", label: "指标" },
   { key: "observations", label: "特征观察" },
-  { key: "experiments", label: "对比实验" },
   { key: "lexicons", label: "研究词库" },
-  { key: "embeddings", label: "向量" },
-  { key: "duplicates", label: "重复" },
+  { key: "baseline", label: "检测基准" },
   { key: "dashboard", label: "全局" },
   { key: "visualization", label: "可视化" }
 ];
@@ -91,11 +94,13 @@ const taskStatusOptions = [
   { label: "待执行", value: "pending" },
   { label: "排队中", value: "queued" },
   { label: "执行中", value: "processing" },
+  { label: "停止中", value: "stopping" },
   { label: "已完成", value: "completed" },
   { label: "失败", value: "failed" },
   { label: "已撤回", value: "rolled_back" },
   { label: "等待撤回", value: "rollback_pending" },
   { label: "撤回中", value: "rolling_back" },
+  { label: "停止撤回中", value: "rollback_stopping" },
   { label: "撤回失败", value: "rollback_failed" },
   { label: "等待删除", value: "delete_pending" },
   { label: "删除中", value: "deleting" },
@@ -106,12 +111,18 @@ const featureTypeOptions = [
   { label: "全部特征", value: "all" },
   { label: "词汇偏向", value: "word" },
   { label: "模板句式", value: "pattern" },
-  { label: "表层句式", value: "surface_pattern" },
+  { label: "模板化表达", value: "template" },
+  { label: "句形结构", value: "sentence_shape" },
+  { label: "词性结构", value: "pos_pattern" },
+  { label: "依存结构", value: "dependency_pattern" },
   { label: "语义依存", value: "semantic_dependency" },
   { label: "依存关系", value: "dependency_relation" },
   { label: "语义角色", value: "semantic_role" },
   { label: "实体类型", value: "entity_type" },
-  { label: "篇章标记", value: "discourse_marker" }
+  { label: "篇章标记", value: "discourse_marker" },
+  { label: "抽象词", value: "abstract_word" },
+  { label: "情绪词", value: "emotion_word" },
+  { label: "感官词", value: "sensory_word" }
 ];
 
 const metricNameMap: Record<string, string> = {
@@ -148,19 +159,31 @@ const metricNameMap: Record<string, string> = {
   punctuation_count: "标点数",
   punctuation_variety: "标点种类数",
   punctuation_density: "标点密度",
+  punctuation_count_density: "标点数量密度",
   comma_count: "逗号数",
+  comma_density: "逗号密度",
   period_count: "句号数",
+  period_density: "句号密度",
   quote_count: "引号数",
+  quote_density: "引号密度",
   question_count: "问号数",
+  question_density: "问号密度",
   exclamation_count: "省略号数",
+  exclamation_density: "感叹号密度",
   ellipsis_count: "省略号数",
+  ellipsis_density: "省略号密度",
   dialogue_char_count: "对白字符数",
   surface_pattern_count: "表层模板句式数",
+  surface_pattern_density: "句式密度",
   discourse_marker_count: "篇章标记数",
+  discourse_marker_density: "篇章标记密度",
   action_word_count: "动作词数",
+  action_word_density: "动作词密度",
   dependency_max_depth: "依存最大深度",
   semantic_frame_count: "语义框架数",
+  semantic_frame_density: "语义框架密度",
   named_entity_count: "命名实体数",
+  named_entity_density: "实体密度",
   noun_ratio: "名词占比",
   verb_ratio: "动词占比",
   adjective_ratio: "形容词占比",
@@ -170,20 +193,25 @@ const metricNameMap: Record<string, string> = {
   particle_ratio: "助词占比",
   adjacent_sentence_similarity: "相邻句相似度",
   abstract_density: "抽象表达密度",
+  abstract_word_density: "抽象词密度",
   smoothness_score: "平滑度分",
   connector_count: "连接词数",
+  connector_density: "连接词密度",
   paragraph_length_cv: "段长变异系数",
   ai_signal_score: "AI迹象分",
   modifier_density: "修饰语密度",
   information_density: "信息密度",
   repeated_ngram_ratio: "重复片段比例",
   specific_marker_count: "具体标记数",
+  specific_marker_density: "具体标记密度",
   sentence_length_entropy: "句子长度熵",
   punctuation_entropy: "标点熵",
   dialogue_ratio: "对白占比",
   abstract_word_count: "抽象词数",
   emotion_word_count: "情绪词数",
+  emotion_word_density: "情绪词密度",
   sensory_word_count: "感官词数",
+  sensory_word_density: "感官词密度",
   template_pattern_count: "模板句式数",
   action_verb_count: "动作词数",
   dependency_average_distance: "依存距离",
@@ -276,12 +304,8 @@ const assetNameMap: Record<string, string> = {
   paragraphs: "段落",
   sentences: "句子",
   metrics: "指标事实",
-  featureDefinitions: "特征字典",
-  featureObservations: "特征观察",
-  embeddings: "向量映射",
-  duplicateEdges: "重复关系",
-  comparisonRuns: "比较运行",
-  comparisonResults: "比较结果",
+  featureDefinitions: "特征项",
+  featureObservations: "特征命中",
   lexicons: "研究词库",
   lexiconEntries: "词库条目"
 };
@@ -289,31 +313,39 @@ const assetNameMap: Record<string, string> = {
 const featureTypeMap: Record<string, string> = {
   word: "词汇偏向",
   pattern: "模板句式",
-  surface_pattern: "表层句式",
+  template: "模板化表达",
+  sentence_shape: "句形结构",
+  pos_pattern: "词性结构",
+  dependency_pattern: "依存结构",
   semantic_dependency: "语义依存",
   dependency_relation: "依存关系",
   semantic_role: "语义角色",
   entity_type: "实体类型",
-  discourse_marker: "篇章标记"
+  discourse_marker: "篇章标记",
+  abstract_word: "抽象词",
+  emotion_word: "情绪词",
+  sensory_word: "感官词"
 };
 
 const taskStatusMap: Record<string, string> = {
   pending: "待执行",
   queued: "排队中",
   processing: "执行中",
+  stopping: "停止中",
   completed: "已完成",
   failed: "失败",
   skipped: "已跳过",
   rolled_back: "已撤回",
   rollback_pending: "等待撤回",
   rolling_back: "撤回中",
+  rollback_stopping: "停止撤回中",
   rollback_failed: "撤回失败",
   delete_pending: "等待删除",
   deleting: "删除中",
   delete_failed: "删除失败"
 };
 
-const busyStatuses = new Set(["queued", "processing", "rollback_pending", "rolling_back", "delete_pending", "deleting"]);
+const busyStatuses = new Set(["queued", "processing", "stopping", "rollback_pending", "rolling_back", "rollback_stopping", "delete_pending", "deleting"]);
 const activeStatuses = new Set([...busyStatuses]);
 
 function buildPageState(): DataState {
@@ -325,8 +357,8 @@ function formatText(value: unknown) {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "-";
   if (typeof value === "object") return JSON.stringify(value);
   const text = String(value);
-  if (/^\d{13}$/.test(text)) return new Date(Number(text)).toLocaleString();
-  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return text.replace("T", " ").slice(0, 19);
+  if (/^\d{13}$/.test(text)) return formatAppDateTime(Number(text));
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) return formatAppDateTime(text);
   return text;
 }
 
@@ -343,6 +375,19 @@ function formatPercent(value: unknown) {
   return `${(Math.abs(num) <= 1 ? num * 100 : num).toFixed(1).replace(/\.0$/, "")}%`;
 }
 
+function formatSignedPercent(value: unknown) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "0%";
+  const normalized = Math.abs(num) <= 1 ? num * 100 : num;
+  const sign = normalized > 0 ? "+" : "";
+  return `${sign}${normalized.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function clampNumber(value: number, min = 0, max = 1) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
 function countNovelPlatformChars(text: string) {
   return Array.from(text.replace(/\s/g, "")).length;
 }
@@ -352,13 +397,7 @@ function countSentences(text: string) {
 }
 
 function formatTime(value: unknown) {
-  if (!value) return "-";
-  if (typeof value === "number" || /^\d+$/.test(String(value))) {
-    const raw = Number(value);
-    const timestamp = raw < 100000000000 ? raw * 1000 : raw;
-    return new Date(timestamp).toLocaleString();
-  }
-  return formatText(value);
+  return formatAppDateTime(value);
 }
 
 function normalizeScore(value: unknown) {
@@ -426,6 +465,15 @@ function sourceTypeName(value: unknown) {
   return String(value) === "human" ? "人工文" : "AI文";
 }
 
+function scopeTypeName(value: unknown) {
+  const key = String(value || "");
+  if (key === "corpus") return "语料块";
+  if (key === "paragraph") return "段落";
+  if (key === "sentence") return "句子";
+  if (key === "document") return "文档";
+  return key || "-";
+}
+
 function taskStatusName(value: unknown) {
   const key = String(value || "");
   return taskStatusMap[key] || key || "-";
@@ -434,7 +482,8 @@ function taskStatusName(value: unknown) {
 function statusClass(value: unknown) {
   const key = String(value || "");
   if (["completed"].includes(key)) return "success";
-  if (["processing", "queued", "rolling_back", "deleting"].includes(key)) return "running";
+  if (["queued"].includes(key)) return "warning";
+  if (["processing", "stopping", "rolling_back", "rollback_stopping", "deleting"].includes(key)) return "running";
   if (["failed", "rollback_failed", "delete_failed"].includes(key)) return "danger";
   return "muted";
 }
@@ -459,6 +508,66 @@ function metricName(value: unknown) {
   return translated.join("");
 }
 
+function metricDisplayName(row: Row) {
+  const displayName = String(row.displayName || row.metricName || "").trim();
+  if (displayName) return displayName;
+  return metricName(row.metricKey);
+}
+
+function metricKeyWithoutScope(value: unknown) {
+  const key = String(value || "").trim();
+  const dotIndex = key.indexOf(".");
+  return dotIndex >= 0 ? key.slice(dotIndex + 1) : key;
+}
+
+function metricScopeFromRow(row: Row) {
+  const scope = String(row.scopeType || "").trim();
+  if (scope) return scope;
+  const key = String(row.metricKey || "").trim();
+  const dotIndex = key.indexOf(".");
+  return dotIndex > 0 ? key.slice(0, dotIndex) : "";
+}
+
+function scoringMetricDisplayName(row: Row) {
+  const scope = metricScopeFromRow(row);
+  const name = metricName(metricKeyWithoutScope(row.metricKey ?? row.metricName));
+  return scope ? `${scopeTypeName(scope)}·${name}` : name;
+}
+
+function metricDisplayDedupeKey(row: Row, hideScopePrefix = false) {
+  const name = metricDisplayName(row);
+  return hideScopePrefix ? stripMetricScopePrefix(name) : name;
+}
+
+function metricDisplayRowRank(row: Row) {
+  const scoreWeight = Number(row.scoreWeight ?? 0);
+  const contribution = Number(row.contribution ?? row.weight ?? 0);
+  const relativeGap = Math.abs(Number(row.relativeGap ?? 0));
+  return Math.max(scoreWeight, contribution, relativeGap, 0);
+}
+
+function dedupeMetricRowsByDisplayName(rows: Row[], hideScopePrefix = false) {
+  const index = new Map<string, number>();
+  const result: Row[] = [];
+  rows.forEach((row) => {
+    const key = metricDisplayDedupeKey(row, hideScopePrefix);
+    if (!key || key === "-") {
+      result.push(row);
+      return;
+    }
+    const existingIndex = index.get(key);
+    if (existingIndex !== undefined) {
+      if (metricDisplayRowRank(row) > metricDisplayRowRank(result[existingIndex])) {
+        result[existingIndex] = row;
+      }
+      return;
+    }
+    index.set(key, result.length);
+    result.push(row);
+  });
+  return result;
+}
+
 function assetName(value: unknown) {
   const key = String(value || "");
   return assetNameMap[key] || key || "-";
@@ -476,6 +585,20 @@ function cleanPayload(filters: Record<string, unknown>, page: PageState) {
     payload[key] = value;
   });
   return payload;
+}
+
+function isEnabledFlag(value: unknown) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function sortDetectionWordRows(rows: Row[]) {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const blackCompare = Number(isEnabledFlag(left.row.isBlacklist)) - Number(isEnabledFlag(right.row.isBlacklist));
+      return blackCompare || left.index - right.index;
+    })
+    .map((item) => item.row);
 }
 
 function getMetricValue(row: Row, key: string) {
@@ -510,17 +633,63 @@ function executionPoint(record: Row) {
   const end = Number(record.currentPageEnd || 0);
   const range = start > 0 ? (end > start ? `${start}-${end}` : `${start}`) : `${next}`;
   const status = String(record.status || "");
-  if (status === "processing") return `正在第 ${range} 块 / 共 ${total} 块`;
-  if (status === "queued") return `排队，从第 ${next} 块继续`;
-  if (status === "failed" && Number(record.nextPageIndex || 0) < total) return `断在第 ${next} 块，可继续`;
-  if (status === "completed") return `已完成 ${total} 块`;
-  if (status === "rolled_back") return "已撤回";
-  return `待执行，从第 ${next} 块开始`;
+  let tone = "pending";
+  let label = "待执行";
+  let detail = `第 ${next} 块开始`;
+
+  if (status === "processing") {
+    tone = "running";
+    label = "执行中";
+    detail = `第 ${range} / ${total} 块`;
+  } else if (status === "stopping") {
+    tone = "running";
+    label = "停止中";
+    detail = `第 ${range} / ${total} 块`;
+  } else if (status === "rollback_pending") {
+    tone = "queued";
+    label = "待撤回";
+    detail = "等待撤回作业";
+  } else if (status === "rolling_back") {
+    tone = "running";
+    label = "撤回中";
+    detail = "清理任务数据";
+  } else if (status === "rollback_stopping") {
+    tone = "running";
+    label = "停止撤回";
+    detail = "等待安全停止";
+  } else if (status === "queued") {
+    tone = "queued";
+    label = "排队";
+    detail = `从第 ${next} 块继续`;
+  } else if (status === "failed" && Number(record.nextPageIndex || 0) < total) {
+    tone = "danger";
+    label = "断点";
+    detail = `第 ${next} 块，可继续`;
+  } else if (status === "completed") {
+    tone = "success";
+    label = "完成";
+    detail = `${total} 块`;
+  } else if (status === "rolled_back") {
+    tone = "muted";
+    label = "已撤回";
+    detail = "";
+  }
+
+  return (
+    <div className={`aitext-execution-cell ${tone}`}>
+      <span className="aitext-execution-status">{label}</span>
+      <span className="aitext-execution-detail">{detail}</span>
+    </div>
+  );
 }
 
 function canExecute(record: Row) {
   const status = String(record.status || "");
   return !busyStatuses.has(status) && ["pending", "failed", "rolled_back"].includes(status);
+}
+
+function canStop(record: Row) {
+  return ["queued", "processing", "rollback_pending", "rolling_back"].includes(String(record.status || ""));
 }
 
 function canRollback(record: Row) {
@@ -532,7 +701,7 @@ function canDelete(record: Row) {
   return !busyStatuses.has(String(record.status || ""));
 }
 
-function SmallBadge({ children, tone = "muted" }: { children: React.ReactNode; tone?: "success" | "running" | "danger" | "muted" | "ai" | "human" }) {
+function SmallBadge({ children, tone = "muted" }: { children: React.ReactNode; tone?: "success" | "warning" | "running" | "danger" | "muted" | "ai" | "human" }) {
   return <span className={`aitext-badge ${tone}`}>{children}</span>;
 }
 
@@ -561,7 +730,7 @@ function DataTable({
         <div className="aitext-table" style={{ minWidth: layout.minWidth }}>
           <div className="aitext-tr aitext-th" style={{ gridTemplateColumns: layout.gridTemplateColumns }}>
             {columns.map((column) => (
-              <div key={column.key}>{column.title}</div>
+              <div key={column.key}>{column.header ?? column.title}</div>
             ))}
           </div>
           <div className="aitext-tbody">
@@ -626,6 +795,9 @@ function SearchBar({
         field.type === "select" ? (
           <AppSelect
             key={field.key}
+            className="aitext-filter-select"
+            triggerClassName="aitext-filter-select-trigger"
+            menuClassName="aitext-filter-select-menu"
             value={String(values[field.key] ?? "all")}
             options={(field.options || []).map((item) => ({ value: String(item.value), label: item.label }))}
             onChange={(value) => onChange(field.key, value)}
@@ -668,15 +840,50 @@ function SwitchCell({ checked, disabled, onChange }: { checked: boolean; disable
   );
 }
 
+function baselineVersionOf(row: Row) {
+  return String(row.baselineVersion || "baseline-v2");
+}
+
+function baselineRowMatches(left: Row, right: Row) {
+  return String(left.scopeType || "") === String(right.scopeType || "")
+    && String(left.metricKey || "") === String(right.metricKey || "")
+    && baselineVersionOf(left) === baselineVersionOf(right);
+}
+
+function sortBaselineRowsByScoreWeight(rows: Row[]) {
+  return [...rows].sort((left, right) => {
+    const weightDiff = Number(right.scoreWeight || 0) - Number(left.scoreWeight || 0);
+    if (Math.abs(weightDiff) > 1e-9) return weightDiff;
+    if (Boolean(left.scoreEligible) !== Boolean(right.scoreEligible)) return Boolean(left.scoreEligible) ? -1 : 1;
+    const importanceDiff = Number(right.importanceScore || 0) - Number(left.importanceScore || 0);
+    if (Math.abs(importanceDiff) > 1e-9) return importanceDiff;
+    return String(left.metricKey || "").localeCompare(String(right.metricKey || ""));
+  });
+}
+
 type RadarPoint = {
   label: string;
   ai: number;
   human: number;
+  current?: number;
   aiRaw: number;
   humanRaw: number;
+  currentRaw?: number;
+  hasCurrent?: boolean;
 };
 
-function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; full?: boolean; zoomed?: boolean }) {
+function stripMetricScopePrefix(label: string) {
+  return label.replace(/^[^·]+·/, "");
+}
+
+function MetricRadarD3({
+  rows,
+  full = false,
+  zoomed = false,
+  compact = false,
+  showCurrent = false,
+  hideScopePrefix = false
+}: { rows: Row[]; full?: boolean; zoomed?: boolean; compact?: boolean; showCurrent?: boolean; hideScopePrefix?: boolean }) {
   const ref = useRef<SVGSVGElement | null>(null);
   const [hovered, setHovered] = useState<RadarPoint | null>(null);
   const values = useMemo(
@@ -684,28 +891,34 @@ function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; fu
       .map((row) => {
         const ai = Number(row.aiAverage ?? row.aiMean ?? 0);
         const human = Number(row.humanAverage ?? row.humanMean ?? 0);
-        const max = Math.max(Math.abs(ai), Math.abs(human), Number.EPSILON);
+        const currentRawValue = row.currentValue ?? row.current ?? row.value;
+        const current = Number(currentRawValue);
+        const hasCurrent = showCurrent && currentRawValue !== undefined && currentRawValue !== null && currentRawValue !== "" && Number.isFinite(current);
+        const max = Math.max(Math.abs(ai), Math.abs(human), hasCurrent ? Math.abs(current) : 0, Number.EPSILON);
         return {
-          label: metricName(row.metricKey ?? row.metricName),
+          label: hideScopePrefix ? stripMetricScopePrefix(metricDisplayName(row)) : metricDisplayName(row),
           ai: Math.min(1, Math.abs(ai) / max),
           human: Math.min(1, Math.abs(human) / max),
+          current: hasCurrent ? Math.min(1, Math.abs(current) / max) : undefined,
           aiRaw: ai,
-          humanRaw: human
+          humanRaw: human,
+          currentRaw: hasCurrent ? current : undefined,
+          hasCurrent
         };
       })
       .filter((item) => item.label !== "-"),
-    [rows]
+    [rows, showCurrent, hideScopePrefix]
   );
   const activePoint = hovered || values[0] || null;
-  const activeMax = activePoint ? Math.max(Math.abs(activePoint.aiRaw), Math.abs(activePoint.humanRaw), Number.EPSILON) : 1;
+  const activeMax = activePoint ? Math.max(Math.abs(activePoint.aiRaw), Math.abs(activePoint.humanRaw), activePoint.hasCurrent ? Math.abs(activePoint.currentRaw || 0) : 0, Number.EPSILON) : 1;
   useEffect(() => {
     const svg = d3.select(ref.current);
     svg.selectAll("*").remove();
-    const width = full ? 980 : 760;
-    const height = full ? 800 : 640;
+    const width = compact ? 680 : full ? 980 : 760;
+    const height = compact ? 560 : full ? 800 : 640;
     const cx = width / 2;
     const cy = height / 2;
-    const radius = full ? 215 : 165;
+    const radius = compact ? 180 : full ? 215 : 165;
     if (!values.length) return;
     svg.attr("viewBox", `0 0 ${width} ${height}`).attr("role", "img").attr("preserveAspectRatio", "xMidYMid meet");
     const g = svg.append("g").attr("transform", `translate(${cx},${cy})`);
@@ -722,7 +935,7 @@ function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; fu
       const x = Math.cos(angle) * radius;
       const y = Math.sin(angle) * radius;
       g.append("line").attr("x1", 0).attr("y1", 0).attr("x2", x).attr("y2", y).attr("stroke", "var(--border-color)").attr("stroke-width", 1);
-      const labelRadius = radius + (full ? 42 : 30);
+      const labelRadius = radius + (compact ? 34 : full ? 42 : 30);
       const angleDeg = (angle * 180) / Math.PI;
       const flipLabel = angleDeg > 90 && angleDeg < 270;
       const lx = Math.cos(angle) * labelRadius;
@@ -742,8 +955,8 @@ function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; fu
         .attr("y", 0)
         .attr("text-anchor", anchor)
         .attr("dominant-baseline", "middle")
-        .attr("font-size", 17)
-        .text(full ? truncateLabel(item.label, 8) : item.label);
+        .attr("font-size", compact ? 11 : 17)
+        .text(full ? truncateLabel(item.label, 8) : compact ? truncateLabel(item.label, 7) : item.label);
       const box = labelText.node()?.getBBox();
       if (box) {
         labelGroup
@@ -769,21 +982,24 @@ function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; fu
       .x((d) => d.x)
       .y((d) => d.y)
       .curve(d3.curveLinearClosed);
-    const drawArea = (key: "ai" | "human", color: string) => {
-      const data = values.map((item, index) => pointOf(index, item[key]));
+    const drawArea = (key: "ai" | "human" | "current", color: string, fillOpacity = 0.12) => {
+      const data = values.map((item, index) => pointOf(index, Number(item[key] ?? 0)));
       g.append("path")
         .datum(data)
         .attr("d", line)
         .attr("fill", color)
-        .attr("fill-opacity", 0.12)
+        .attr("fill-opacity", fillOpacity)
         .attr("stroke", color)
-        .attr("stroke-width", 3);
+        .attr("stroke-width", compact ? 2.5 : 3);
       values.forEach((item, index) => {
-        const point = pointOf(index, item[key]);
+        if (key === "current" && !item.hasCurrent) {
+          return;
+        }
+        const point = pointOf(index, Number(item[key] ?? 0));
         g.append("circle")
           .attr("cx", point.x)
           .attr("cy", point.y)
-          .attr("r", full ? 3 : 4)
+          .attr("r", compact ? 3 : full ? 3 : 4)
           .attr("fill", color)
           .attr("stroke", color)
           .attr("stroke-width", 1)
@@ -793,7 +1009,7 @@ function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; fu
         g.append("circle")
           .attr("cx", point.x)
           .attr("cy", point.y)
-          .attr("r", full ? 9 : 12)
+          .attr("r", compact ? 9 : full ? 9 : 12)
           .attr("fill", "transparent")
           .style("cursor", "default")
           .on("mouseenter", () => setHovered(item))
@@ -802,14 +1018,24 @@ function MetricRadarD3({ rows, full = false, zoomed = false }: { rows: Row[]; fu
     };
     drawArea("human", "#12b981");
     drawArea("ai", "#ff2f5f");
-  }, [values, full]);
+    if (showCurrent && values.some((item) => item.hasCurrent)) {
+      drawArea("current", "#1677ff", 0.08);
+    }
+  }, [values, full, compact, showCurrent]);
   return (
-    <div className={`aitext-radar-wrap ${zoomed ? "zoomed" : ""}`} onMouseLeave={() => setHovered(null)}>
-      <svg className={`aitext-d3-radar ${full ? "full" : ""} ${zoomed ? "zoomed" : ""}`} ref={ref} />
+    <div className={`aitext-radar-wrap ${compact ? "compact" : ""} ${zoomed ? "zoomed" : ""}`} onMouseLeave={() => setHovered(null)}>
+      <svg className={`aitext-d3-radar ${compact ? "compact" : ""} ${full ? "full" : ""} ${zoomed ? "zoomed" : ""}`} ref={ref} />
       {activePoint ? (
         <div className={`aitext-radar-hover-card ${hovered ? "visible" : ""}`}>
           <strong>{activePoint.label}</strong>
           <div className="aitext-radar-hover-bars">
+            {activePoint.hasCurrent ? (
+              <div>
+                <span>待测文本</span>
+                <i><em className="current" style={{ width: `${Math.max(4, (Math.abs(activePoint.currentRaw || 0) / activeMax) * 100)}%` }} /></i>
+                <b>{formatNumber(activePoint.currentRaw)}</b>
+              </div>
+            ) : null}
             <div>
               <span>人工文</span>
               <i><em className="human" style={{ width: `${Math.max(4, (Math.abs(activePoint.humanRaw) / activeMax) * 100)}%` }} /></i>
@@ -928,13 +1154,74 @@ function SampleDonutD3({ sourceStats }: { sourceStats: Row[] }) {
   ) : <div className="aitext-empty">暂无样本构成数据</div>;
 }
 
+function DetectCompositionDonut({ composition, score }: { composition: Row; score: number }) {
+  const ref = useRef<SVGSVGElement | null>(null);
+  const rows = useMemo(() => {
+    const rawRows = [
+      { key: "human", name: "人工", value: Number(composition.humanRatio), color: "#12b981" },
+      { key: "suspicious", name: "疑似AI", value: Number(composition.suspiciousRatio), color: "#d39c00" },
+      { key: "ai", name: "AI", value: Number(composition.aiRatio), color: "#ff2f5f" }
+    ];
+    const total = rawRows.reduce((sum, item) => sum + (Number.isFinite(item.value) && item.value > 0 ? item.value : 0), 0);
+    if (total > 0) {
+      return rawRows.map((item) => ({ ...item, value: Math.max(0, item.value) / total }));
+    }
+    const normalizedScore = clampNumber(score / 100, 0, 1);
+    if (normalizedScore >= 0.62) return [{ key: "human", name: "人工", value: 0, color: "#12b981" }, { key: "suspicious", name: "疑似AI", value: 0, color: "#d39c00" }, { key: "ai", name: "AI", value: 1, color: "#ff2f5f" }];
+    if (normalizedScore <= 0.38) return [{ key: "human", name: "人工", value: 1, color: "#12b981" }, { key: "suspicious", name: "疑似AI", value: 0, color: "#d39c00" }, { key: "ai", name: "AI", value: 0, color: "#ff2f5f" }];
+    return [{ key: "human", name: "人工", value: 0, color: "#12b981" }, { key: "suspicious", name: "疑似AI", value: 1, color: "#d39c00" }, { key: "ai", name: "AI", value: 0, color: "#ff2f5f" }];
+  }, [composition.aiRatio, composition.humanRatio, composition.suspiciousRatio, score]);
+  const aiRatio = rows.find((item) => item.key === "ai")?.value || 0;
+  useEffect(() => {
+    const svg = d3.select(ref.current);
+    svg.selectAll("*").remove();
+    const width = 160;
+    const height = 138;
+    const radius = 58;
+    const data = rows.filter((item) => item.value > 0);
+    svg.attr("viewBox", `0 0 ${width} ${height}`).attr("role", "img").attr("preserveAspectRatio", "xMidYMid meet");
+    if (!data.length) return;
+    const g = svg.append("g").attr("transform", `translate(${width / 2},${height / 2})`);
+    const pie = d3.pie<(typeof data)[number]>().value((d) => d.value).sort(null);
+    const arc = d3.arc<d3.PieArcDatum<(typeof data)[number]>>().innerRadius(34).outerRadius(radius);
+    g.selectAll("path")
+      .data(pie(data))
+      .join("path")
+      .attr("d", arc)
+      .attr("fill", (d) => d.data.color)
+      .attr("stroke", "var(--card-bg)")
+      .attr("stroke-width", 2);
+    g.append("text").attr("text-anchor", "middle").attr("font-size", 12).attr("fill", "var(--text-color-secend)").attr("dy", "-0.35em").text("AI占比");
+    g.append("text").attr("text-anchor", "middle").attr("font-size", 19).attr("font-weight", 700).attr("fill", "var(--text-color)").attr("dy", "0.95em").text(formatPercent(aiRatio));
+  }, [rows, aiRatio]);
+  return (
+    <div className="detect-composition-chart">
+      <svg className="detect-composition-donut" ref={ref} />
+      <div className="detect-composition-list">
+        {rows.map((item) => (
+          <div
+            key={item.key}
+            style={{
+              "--composition-color": item.color,
+              "--composition-percent": `${Math.round(clampNumber(item.value, 0, 1) * 10000) / 100}%`
+            } as React.CSSProperties}
+          >
+            <span><i style={{ background: item.color }} />{item.name}</span>
+            <b>{formatPercent(item.value)}</b>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MetricBiasD3({ rows }: { rows: Row[] }) {
   const data = rows
     .map((row) => {
       const diff = Number(row.difference ?? row.meanDiff ?? 0);
       const gap = Number(row.relativeGap ?? 0);
       return {
-        label: metricName(row.metricKey ?? row.metricName),
+        label: stripMetricScopePrefix(metricDisplayName(row)),
         value: Number.isFinite(diff) ? diff : 0,
         gap,
         ai: Number(row.aiAverage ?? row.aiMean ?? 0),
@@ -1089,7 +1376,7 @@ function MetricHeatmapD3({ rows }: { rows: Row[] }) {
       const gap = relativeMetricGap(row);
       return {
         ...(row as Row),
-        label: metricName(row.metricKey || row.metricName),
+        label: stripMetricScopePrefix(metricDisplayName(row)),
         aiNorm: metricNormalizedValue(row, "ai"),
         humanNorm: metricNormalizedValue(row, "human"),
         diff: Math.min(100, Math.abs(gap) * 50),
@@ -1125,7 +1412,7 @@ function MetricHeatmapD3({ rows }: { rows: Row[] }) {
         ))}
       </div>
     </div>
-  ) : <div className="aitext-empty">暂无全量指标数据</div>;
+  ) : <div className="aitext-empty">暂无指标热力数据</div>;
 }
 
 function FeatureSignificanceD3({ rows }: { rows: Row[] }) {
@@ -1193,8 +1480,8 @@ function riskLevelFromScore(score: unknown, fallback?: unknown) {
   if (text.includes("medium") || text.includes("中")) return "medium";
   if (text.includes("low") || text.includes("低")) return "low";
   const normalized = normalizeScore(score);
-  if (normalized >= 65) return "high";
-  if (normalized >= 26) return "medium";
+  if (normalized >= 72) return "high";
+  if (normalized >= 55) return "medium";
   return "low";
 }
 
@@ -1207,18 +1494,35 @@ function riskClassName(value: unknown, score?: unknown) {
   return `risk-${riskLevelFromScore(score, value)}`;
 }
 
+function normalizeRatioValue(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return number > 1 ? number / 100 : number;
+}
+
+function dominantCompositionRiskLevel(composition: Row, fallbackScore?: unknown) {
+  const human = normalizeRatioValue(composition.humanRatio);
+  const suspicious = normalizeRatioValue(composition.suspiciousRatio);
+  const ai = normalizeRatioValue(composition.aiRatio);
+  if (human + suspicious + ai <= 0) return riskLevelFromScore(fallbackScore);
+  if (ai >= human && ai >= suspicious) return "high";
+  if (suspicious >= human) return "medium";
+  return "low";
+}
+
 function evidenceTypeName(value: unknown) {
   const key = String(value || "");
   const map: Record<string, string> = {
     baseline_metric: "指标偏离",
-    learned_word: "AI偏向词汇",
-    learned_pattern: "AI偏向句式",
+    learned_word: "AI高频词汇",
+    sensitive_word: "违规词汇",
+    learned_pattern: "AI偏向句形",
     learned_feature: "AI偏向特征",
     smoothness: "节奏平滑",
     abstractness: "抽象表达",
     low_information: "低信息密度",
     repetition: "重复表达",
-    template: "模板句式",
+    template: "模板化表达",
     style_change: "风格突变",
     sentence_metric: "句子指标",
     structure: "结构启发"
@@ -1256,18 +1560,7 @@ function contributionNumber(item: Row) {
   return Number.isFinite(value) ? Math.abs(value) : 0;
 }
 
-const connectorTerms = ["于是", "然后", "然而", "因此", "所以", "但是", "可是", "不过", "同时", "随后", "接着", "与此同时", "换句话说", "总之", "显然"];
-const abstractTerms = ["命运", "尊严", "体面", "人生", "黑暗", "光明", "深渊", "泥沼", "绝境", "希望", "痛苦", "恐惧", "孤独", "沉默", "崩塌", "救赎", "宿命", "灵魂"];
-const templateTerms = ["不是", "而是", "仿佛", "像是", "似乎", "就像", "一瞬间", "这一刻", "这一切", "说不清", "不知道为什么"];
 const ignoredSingleMarkers = new Set(["的", "了", "是", "不", "在", "有", "和", "也", "就", "都", "又", "还", "吗", "呢", "啊", "呀", "吧", "着", "过", "把", "被", "对", "中", "上", "下", "里"]);
-
-function evidenceLevelClass(value: unknown) {
-  const key = String(value || "").toLowerCase();
-  if (key.includes("strong") || key.includes("强")) return "level-strong";
-  if (key.includes("medium") || key.includes("中")) return "level-medium";
-  if (key.includes("weak") || key.includes("弱")) return "level-weak";
-  return "level-none";
-}
 
 function evidenceKeyName(value: unknown) {
   return metricName(value || "");
@@ -1290,35 +1583,21 @@ function evidenceDetailMessage(item: Row) {
   if (type === "baseline_metric") {
     return `${formatText(item.metricName || "该指标")}与人工样本分布存在偏离，当前值为 ${formatNumber(item.value)}，人工分位 P${formatNumber(item.humanPercentile)}，AI 分位 P${formatNumber(item.aiPercentile)}。`;
   }
-  if (type === "learned_word") return `命中 AI 偏向词汇「${evidenceFeatureText(item)}」，该词在当前基准中相对更接近 AI 文样本。`;
-  if (type === "learned_pattern") return `命中 AI 偏向句式「${evidenceFeatureText(item)}」，需要检查是否存在套话或固定表达。`;
+  if (type === "learned_word") return `命中检测词汇「${evidenceFeatureText(item)}」，该词在当前基准中属于 AI 高频词汇。`;
+  if (type === "sensitive_word") return `命中违规词汇「${evidenceFeatureText(item)}」，仅作为平台审核风险提醒，不参与 AI 评分。`;
+  if (type === "learned_pattern") return `命中 AI 偏向句形「${evidenceFeatureText(item)}」，需要结合上下文检查句形结构是否异常集中。`;
   if (type === "learned_feature") return `命中 AI 偏向特征「${evidenceFeatureText(item)}」，该特征与当前基准中的 AI 文样本更接近。`;
   return raw || evidenceReadableMessage(item) || `${evidenceTypeName(type)}对本段风险贡献 ${formatPercent(item.weight ?? item.contribution)}。`;
 }
 
 function markerCategoryForEvidence(item: Row) {
   const type = String(item.type || "");
-  const key = String(item.key || "");
   if (type === "learned_word") return "word";
-  if (type === "learned_pattern" || type === "template" || key.includes("template")) return "template";
+  if (type === "sensitive_word") return "sensitive";
+  if (type === "learned_pattern") return "feature";
   if (type === "learned_feature") return "feature";
-  if (type === "abstractness" || key.includes("abstract")) return "abstract";
-  if (type === "low_information" || key.includes("information_density")) return "low_information";
-  if (type === "repetition" || key.includes("repeated") || key.includes("repetition")) return "repetition";
-  if (type === "connector" || key.includes("connector")) return "connector";
+  if (type === "low_information") return "low_information";
   return "";
-}
-
-function collectRepeatedFragments(text: string) {
-  const compact = text.replace(/[，。！？、“”‘’；：,.!?;:\s]/g, "");
-  const counts = new Map<string, number>();
-  for (let size = 2; size <= 4; size += 1) {
-    for (let i = 0; i <= compact.length - size; i += 1) {
-      const part = compact.slice(i, i + size);
-      if (/^[一-龥]{2,4}$/.test(part)) counts.set(part, (counts.get(part) || 0) + 1);
-    }
-  }
-  return [...counts.entries()].filter(([, count]) => count >= 2).sort((a, b) => b[0].length - a[0].length || b[1] - a[1]).slice(0, 6).map(([value]) => value);
 }
 
 function isUsefulMarkerText(value: unknown) {
@@ -1329,20 +1608,15 @@ function isUsefulMarkerText(value: unknown) {
   return !/AI高频|命中|信息密度/.test(text);
 }
 
-function inlineMarkerTexts(item: Row, text: string) {
+function inlineMarkerTexts(item: Row) {
   const category = markerCategoryForEvidence(item);
   const feature = evidenceFeatureText(item);
   const base = feature && !/^(abstract_|connector_|repeated_|template_|smoothness|information_density|surface_pattern|paragraph_|sentence_)/.test(feature) ? [feature] : [];
-  if (category === "connector") return connectorTerms.filter((term) => text.includes(term));
-  if (category === "abstract") return abstractTerms.filter((term) => text.includes(term));
-  if (category === "template") return [...base, ...templateTerms.filter((term) => text.includes(term))];
-  if (category === "repetition") return [...base, ...collectRepeatedFragments(text)];
-  if (category === "low_information") return [];
-  return base;
+  return category ? base : [];
 }
 
 function markerCategoryPriority(category: string) {
-  return ({ template: 60, repetition: 50, connector: 40, abstract: 30, word: 20, feature: 10, low_information: 0 } as Record<string, number>)[category] || 0;
+  return ({ sensitive: 40, word: 30, feature: 20, low_information: 10 } as Record<string, number>)[category] || 0;
 }
 
 function markerStrengthRank(value: unknown) {
@@ -1354,28 +1628,19 @@ function strongerMarkerStrength(left: string, right: string) {
 }
 
 function normalizeReadingText(value: unknown) {
-  return String(value || "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+  return String(value ?? "");
 }
 
 function collectMarkerSpans(block: Row) {
   const sourceText = String(block.text || "");
   const candidates: Array<{ start: number; end: number; category: string; strength: string; priority: number; text: string }> = [];
-  let hasLowInformation = false;
   asRows(block.evidence || block.evidences || block.signals).forEach((item) => {
-    if (item.direction && item.direction !== "ai") return;
+    if (item.direction && item.direction !== "ai" && item.type !== "sensitive_word") return;
     const rawCategory = markerCategoryForEvidence(item);
-    const category = rawCategory || "feature";
+    if (!rawCategory) return;
+    const category = rawCategory;
     const strength = evidenceStrengthClass(item.strength);
-    if (rawCategory === "low_information") {
-      hasLowInformation = true;
-      return;
-    }
-    inlineMarkerTexts(item, sourceText).filter(isUsefulMarkerText).forEach((text) => {
+    inlineMarkerTexts(item).filter(isUsefulMarkerText).forEach((text) => {
       let start = sourceText.indexOf(text);
       while (start >= 0) {
         candidates.push({ start, end: start + text.length, category, strength, priority: markerCategoryPriority(category), text });
@@ -1407,12 +1672,22 @@ function collectMarkerSpans(block: Row) {
       }
     });
 
-  return { spans: merged.slice(0, 16), hasLowInformation };
+  return { spans: merged.slice(0, 16) };
+}
+
+function hasLowInformationEvidence(block: Row) {
+  return asRows(block.evidence || block.evidences || block.signals).some((item) => String(item.type || "") === "low_information");
+}
+
+function blockHasMarkerCategory(block: Row, category: string) {
+  if (category === "low_information") return hasLowInformationEvidence(block);
+  return collectMarkerSpans(block).spans.some((item) => item.category === category);
 }
 
 function renderAnnotatedText(block: Row) {
   const sourceText = String(block.text || "");
-  const { spans, hasLowInformation } = collectMarkerSpans(block);
+  const { spans } = collectMarkerSpans(block);
+  const lowInformation = hasLowInformationEvidence(block);
   let lineStart = 0;
   const lines = sourceText.split("\n");
   return lines.map((line, lineIndex) => {
@@ -1433,17 +1708,15 @@ function renderAnnotatedText(block: Row) {
     });
     if (cursor < lineEnd) nodes.push(sourceText.slice(cursor, lineEnd));
     lineStart = lineEnd + 1;
-    if (!line.trim()) return null;
-    const lineOnlyLowInformation = hasLowInformation && lineSpans.length === 0;
     return (
-      <span className={`detect-text-line ${lineOnlyLowInformation ? "line-low-information" : ""}`} key={`${lineIndex}-${line.slice(0, 12)}`}>
+      <span className={`detect-text-line${lowInformation ? " line-low-information" : ""}`} key={`${lineIndex}-${line.slice(0, 12)}`}>
         {nodes.length ? nodes : line}
       </span>
     );
-  }).filter(Boolean);
+  });
 }
 
-function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; detailOpen: boolean; onCloseDetail: () => void }) {
+function DetectReport({ result, detailOpen, onCloseDetail, onClear }: { result: Row; detailOpen: boolean; onCloseDetail: () => void; onClear: () => void }) {
   const [selected, setSelected] = useState(0);
   const [detailTab, setDetailTab] = useState<"metrics" | "evidence" | "features" | "review">("metrics");
   const report = (result.report || result.summary || {}) as Row;
@@ -1464,20 +1737,30 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
     setDetailTab("metrics");
   }, [result]);
   const current = (blocks[selected] || blocks[0] || {}) as Row;
+  const isDocumentMode = blocks.length <= 1;
+  const currentDisplayScore = normalizeScore(current.displayScore ?? current.aiScore ?? 0);
+  const isLowRiskConclusion = currentDisplayScore <= (1 - 0.62) * 100;
   const rawEvidence = asRows(current.evidence || current.evidences || current.signals || result.evidence || result.evidences).map((row, index) => ({
     ...row,
     evidenceKey: `${row.type || "evidence"}-${row.key || row.metricName || index}-${index}`
   })) as Row[];
-  const selectedEvidenceRows = rawEvidence.slice(0, 12);
+  const selectedEvidenceRows = isLowRiskConclusion ? [] : rawEvidence.slice(0, 12);
   const metricComparisons = asRows(result.metricComparisons || result.metrics || report.metricComparisons);
-  const aiInsights = asRows(report.aiInsights || result.aiInsights);
-  const selectedInsight = aiInsights.find((item) => Number(item.blockIndex) === Number(current.index));
   const score = normalizeScore(report.score ?? summary.score ?? result.score ?? current.aiScore ?? 0);
-  const confidence = report.confidencePercent ?? report.confidence ?? summary.confidence ?? result.confidence ?? 0;
-  const blockCount = Number(summary.blockCount ?? summary.paragraphCount ?? blocks.length ?? 0);
-  const highRisk = Number(summary.highRiskBlocks ?? summary.highRiskParagraphs ?? report.highRiskBlocks ?? blocks.filter((item) => riskLevelFromScore(item.displayScore, item.riskLevel) === "high").length);
-  const strengthLevel = riskLevelFromScore(score);
-  const riskSources = (asRows(report.riskSources).length
+  const reportComposition = ((report.composition || summary.composition || {}) as Row);
+  const composition = {
+    humanRatio: summary.humanRatio ?? reportComposition.humanRatio,
+    suspiciousRatio: summary.suspiciousRatio ?? reportComposition.suspiciousRatio,
+    aiRatio: summary.aiRatio ?? reportComposition.aiRatio
+  } as Row;
+  const documentRiskLevel = dominantCompositionRiskLevel(composition, score);
+  const markerLegendItems = [
+    { key: "word", label: "AI高频词汇", className: "legend-word" },
+    { key: "feature", label: "AI偏向句形/特征", className: "legend-feature" },
+    { key: "low_information", label: "低信息句", className: "legend-low-information" },
+    { key: "sensitive", label: "违规词汇", className: "legend-sensitive" }
+  ].filter((item) => blocks.some((block) => blockHasMarkerCategory(block, item.key)));
+  const riskSources = isLowRiskConclusion ? [] : (asRows(report.riskSources).length
     ? asRows(report.riskSources)
     : ["baseline_metric", "learned_word", "learned_pattern", "learned_feature", "structure"].map((type) => {
       const rows = rawEvidence.filter((item) => (type === "structure" ? !["baseline_metric", "learned_word", "learned_pattern", "learned_feature"].includes(String(item.type)) : item.type === type));
@@ -1490,12 +1773,36 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
   const reviewSteps = asRows(report.reviewSteps).map((item) => formatText(item)).filter(Boolean);
   const baselineReady = result.baselineReady !== false;
   const primaryEvidence = [...selectedEvidenceRows].sort((a, b) => markerStrengthRank(b.strength) + Number(b.weight || 0) - (markerStrengthRank(a.strength) + Number(a.weight || 0)))[0];
-  const scoreBreakdown = [
-    { key: "baseline", label: "基准偏离", value: current.baselineScore ?? current.baselineDeviationScore },
-    { key: "feature", label: "样本偏向", value: current.featureScore ?? current.learningScore },
-    { key: "heuristic", label: "结构启发", value: current.heuristicScore ?? current.structureScore }
+  const scoreBreakdownRows = asRows(current.scoreBreakdown);
+  const scoreBreakdown = scoreBreakdownRows.length ? scoreBreakdownRows : [
+    { key: "baseline", label: "基准主分", value: current.baselineScore ?? current.baselineDeviationScore },
+    { key: "feature", label: "AI证据校准", value: 0, delta: 0 },
+    { key: "heuristic", label: "结构校准", value: 0, delta: 0 }
   ];
-  const evidenceLevel = score >= 70 ? "strong" : score > 25 ? "medium" : "weak";
+  const displayMetricComparisons = dedupeMetricRowsByDisplayName(metricComparisons.map((row): Row => ({
+    ...row,
+    metricName: metricName(metricKeyWithoutScope(row.metricKey ?? row.metricName)),
+    displayName: scoringMetricDisplayName(row)
+  })), true);
+  const detectScoringRadarRows = dedupeMetricRowsByDisplayName(metricComparisons
+    .filter((row) => {
+      const currentValue = Number(row.currentValue ?? row.current ?? row.value);
+      const ai = Number(row.aiAverage ?? row.aiMean);
+      const human = Number(row.humanAverage ?? row.humanMean);
+      const scoreWeight = Number(row.scoreWeight ?? row.contribution ?? 0);
+      const isScoreEligible = row.scoreEligible === true || row.scoreEligible === undefined;
+      return isScoreEligible && scoreWeight > 0 && Number.isFinite(currentValue) && Number.isFinite(ai) && Number.isFinite(human);
+    })
+    .sort((a, b) => {
+      const weightDiff = Number(b.scoreWeight ?? 0) - Number(a.scoreWeight ?? 0);
+      if (weightDiff !== 0) return weightDiff;
+      return Number(b.contribution ?? 0) - Number(a.contribution ?? 0);
+    })
+    .map((row): Row => ({
+      ...row,
+      metricName: metricName(metricKeyWithoutScope(row.metricKey ?? row.metricName)),
+      displayName: scoringMetricDisplayName(row)
+    })), true);
 
   useEffect(() => {
     if (detailTab !== "metrics" || metricComparisons.length) return;
@@ -1511,51 +1818,33 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
   return (
     <div className="aitext-detect-report-page">
       <div className="aitext-detect-kpis">
-        <article className={`score-card ${riskClassName(strengthLevel, score)}`}>
-          <span>综合分</span>
-          <div><strong>{formatNumber(score, 0)}</strong><em>/100</em><b>{riskName(strengthLevel)}风险</b></div>
-          <p><i style={{ left: `${score}%` }} />0 低风险 · 100 高风险</p>
-        </article>
-        <article>
-          <span>置信度</span>
-          <strong>{formatPercent(confidence)}</strong>
-          <p><i style={{ width: formatPercent(confidence) }} />多维痕迹互印证</p>
-        </article>
-        <article>
-          <span>高风险块</span>
-          <strong>{highRisk} / {blockCount}</strong>
-          <p>{blockCount ? `占比 ${formatPercent(highRisk / blockCount)}` : "暂无文本块"}</p>
-        </article>
-        <article className={`shield-card ${evidenceLevelClass(evidenceLevel)}`}>
-          <span>痕迹强度</span>
-          <strong>{evidenceLevel === "strong" ? "强" : evidenceLevel === "medium" ? "中" : "弱"}</strong>
-          <p>按综合评分映射</p>
+        <article className="composition-card">
+          <span>文本占比</span>
+          <DetectCompositionDonut composition={composition} score={score} />
         </article>
       </div>
 
-      {!baselineReady ? <div className="aitext-detect-warning">{formatText((result.baselineStatus as Row)?.message || "当前 AI/人工基准较少，检测主要依赖结构启发式指标。")}</div> : null}
+      {!baselineReady ? <div className="aitext-detect-warning">{formatText((result.baselineStatus as Row)?.message || "当前 AI/人工评分基准不足，综合分暂以辅助证据估算。")}</div> : null}
 
       <div className="aitext-detect-main">
         <section className="detect-article-panel">
           <div className="detect-legend-row">
-            <span>痕迹图例：</span>
-            <span className="legend-stroke strong"><i />强痕迹</span>
-            <span className="legend-stroke medium"><i />中痕迹</span>
-            <span className="legend-stroke weak"><i />弱痕迹</span>
-            <span className="legend-pill legend-word">词汇偏向</span>
-            <span className="legend-pill legend-template">模板句式</span>
-            <span className="legend-pill legend-connector">连接词</span>
-            <span className="legend-pill legend-abstract">抽象表达</span>
-            <span className="legend-pill legend-repetition">重复短语</span>
-            <span className="legend-pill legend-low">低信息句</span>
-            <span className="risk-legend">块风险色：</span>
-            <span className="risk-pill high">高</span>
-            <span className="risk-pill medium">中</span>
-            <span className="risk-pill low">低</span>
+            <span>高频标记：</span>
+            {markerLegendItems.length ? markerLegendItems.map((item) => (
+              <span className={`legend-pill ${item.className}`} key={item.key}>{item.label}</span>
+            )) : <span className="text-muted">暂无</span>}
+            <button type="button" className="detect-report-clear-button" onClick={onClear}>清空</button>
           </div>
-          <div className="detect-blocks">
+          <div className={`detect-blocks ${isDocumentMode ? "is-single" : ""}`}>
             {blocks.length ? blocks.map((block, index) => {
-              const level = riskLevelFromScore(block.displayScore, block.riskLevel);
+              const level = isDocumentMode ? documentRiskLevel : riskLevelFromScore(block.displayScore, block.riskLevel);
+              if (isDocumentMode) {
+                return (
+                  <article key={`${block.index}-${index}`} className={`detect-block risk-${level}`}>
+                    <p>{renderAnnotatedText(block)}</p>
+                  </article>
+                );
+              }
               return (
                 <button key={`${block.index}-${index}`} className={`detect-block ${selected === index ? "active" : ""} risk-${level}`} type="button" onClick={() => setSelected(index)}>
                   <p>{renderAnnotatedText(block)}</p>
@@ -1566,21 +1855,35 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
         </section>
 
         <aside className="detect-side-panel" key={`side-${formatText(result.id || result.taskId || "preview")}-${selected}`}>
+          {detectScoringRadarRows.length ? (
+            <section className="detect-side-section detect-metric-radar-card">
+              <header><strong>评分项雷达</strong><span>蓝色为待测文本</span></header>
+              <MetricRadarD3 rows={detectScoringRadarRows} compact showCurrent hideScopePrefix />
+            </section>
+          ) : null}
           <div className={`detect-current-card ${riskClassName(current.riskLevel, current.displayScore)}`}>
             <div>
-              <strong>第{formatText(current.index || selected + 1)}块痕迹链</strong>
-              <span>当前选取文本块</span>
+              <strong>{isDocumentMode ? "整章痕迹链" : `第${formatText(current.index || selected + 1)}块痕迹链`}</strong>
+              <span>{isDocumentMode ? "当前检测全文" : "当前选取文本块"}</span>
             </div>
             <b>{riskName(current.riskLevel)}风险</b>
           </div>
           <div className="detect-block-score-line">
-            <span>块得分</span>
+            <span>{isDocumentMode ? "整章得分" : "块得分"}</span>
             <b>{formatNumber(current.displayScore, 0)}</b>
             <em>/ 100</em>
           </div>
           <div className="detect-score-breakdown">
             {scoreBreakdown.map((item) => (
-              <div key={item.key}><span>{item.label}</span><strong>{formatPercent(item.value ?? 0)}</strong></div>
+              <div key={String(item.key || item.label)}>
+                <span>{formatText(item.label)}</span>
+                {"delta" in item ? (
+                  <strong className={Number(item.delta) > 0 ? "is-positive" : Number(item.delta) < 0 ? "is-negative" : ""}>{formatSignedPercent(item.delta)}</strong>
+                ) : (
+                  <strong>{formatPercent(item.value ?? 0)}</strong>
+                )}
+                {item.description ? <em>{formatText(item.description)}</em> : null}
+              </div>
             ))}
           </div>
           <section className="detect-side-section">
@@ -1613,17 +1916,8 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
               <p>当前块没有返回可解释指标，建议结合上下文和人工复核判断。</p>
             )}
           </section>
-          {selectedInsight ? (
-            <section className="detect-side-section ai-insight">
-              <header><strong>AI语义复核</strong><span>辅助解释</span></header>
-              <strong>{formatText(selectedInsight.title || "语义痕迹说明")}</strong>
-              <p>{formatText(selectedInsight.summary)}</p>
-              {asRows(selectedInsight.traces).length ? <ul>{asRows(selectedInsight.traces).map((item, index) => <li key={index}>{formatText(item)}</li>)}</ul> : null}
-              {selectedInsight.suggestion ? <em>{formatText(selectedInsight.suggestion)}</em> : null}
-            </section>
-          ) : null}
           <section className="detect-side-section">
-            <header><strong>痕迹回放</strong><span>针对当前块</span></header>
+            <header><strong>痕迹回放</strong><span>{isDocumentMode ? "针对全文" : "针对当前块"}</span></header>
             <div className="detect-evidence-stack">
               {selectedEvidenceRows.slice(0, 4).map((item, index) => (
                 <div className={evidenceStrengthClass(item.strength)} key={String(item.evidenceKey || index)}>
@@ -1634,7 +1928,7 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
                   </span>
                 </div>
               ))}
-              {!rawEvidence.length ? <div className="aitext-empty">暂无当前块痕迹</div> : null}
+              {!rawEvidence.length ? <div className="aitext-empty">{isDocumentMode ? "暂无全文痕迹" : "暂无当前块痕迹"}</div> : null}
             </div>
           </section>
           <div className="detect-note">
@@ -1669,7 +1963,7 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
               </div>
               {detailTab === "metrics" ? (
                 <DataTable columns={[
-                  { key: "metricKey", title: "指标", width: 220, render: (row) => metricName(row.metricKey || row.metricName) },
+                  { key: "metricKey", title: "指标", width: 220, render: (row) => stripMetricScopePrefix(metricDisplayName(row)) },
                   { key: "currentValue", title: "当前值", width: 120, render: (row) => formatNumber(row.currentValue ?? row.value) },
                   { key: "aiAverage", title: "AI均值", width: 120, render: (row) => formatNumber(row.aiAverage ?? row.aiMean) },
                   { key: "humanAverage", title: "人工均值", width: 120, render: (row) => formatNumber(row.humanAverage ?? row.humanMean) },
@@ -1677,7 +1971,7 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
                   { key: "contribution", title: "贡献", width: 100, render: (row) => formatPercent(row.contribution ?? row.weight) },
                   { key: "strength", title: "强度", width: 100, render: (row) => evidenceStrengthName(row.strength) },
                   { key: "explain", title: "解释", width: 360, render: (row) => formatText(row.explain || row.description || row.reason || row.message) }
-                ]} rows={metricComparisons} minWidth={1380} />
+                ]} rows={displayMetricComparisons} minWidth={1380} />
               ) : detailTab === "evidence" ? (
                 <DataTable columns={[
                   { key: "type", title: "痕迹类型", width: 140, render: (row) => evidenceTypeName(row.type) },
@@ -1698,7 +1992,7 @@ function DetectReport({ result, detailOpen, onCloseDetail }: { result: Row; deta
                 ]} rows={featureRows} minWidth={1020} />
               ) : (
                 <div className="detect-review-steps">
-                  {(reviewSteps.length ? reviewSteps : ["按文本块计算结构、基准偏离与样本偏向。", "聚合风险来源并给出综合分。", "检测结果仅用于定位疑似 AI 痕迹。"]).map((step, index) => (
+                  {(reviewSteps.length ? reviewSteps : ["综合分优先按评分项加权计算。", "词汇、句式、结构启发仅作为解释证据。", "检测结果仅用于定位疑似 AI 痕迹。"]).map((step, index) => (
                     <div key={step}><b>{index + 1}</b><span>{step}</span></div>
                   ))}
                 </div>
@@ -1720,23 +2014,25 @@ export default function AiTextPage() {
   const [datasets, setDatasets] = useState<Record<string, DataState>>({});
   const [summary, setSummary] = useState<Row>({});
   const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [radarZoomed, setRadarZoomed] = useState(false);
   const [baseline, setBaseline] = useState<Row>({});
+  const [baselineRows, setBaselineRows] = useState<Row[]>([]);
   const [baselineLoading, setBaselineLoading] = useState(false);
   const [baselineConfirmOpen, setBaselineConfirmOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [clearConfirmText, setClearConfirmText] = useState("");
   const [batchPages, setBatchPages] = useState(1);
-  const [concurrency] = useState(1);
+  const [taskConcurrency, setTaskConcurrency] = useState(1);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [taskBusy, setTaskBusy] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadDeduped, setUploadDeduped] = useState(false);
   const [uploadSourceType, setUploadSourceType] = useState("ai");
   const [uploadChars, setUploadChars] = useState(2000);
   const [detectOpen, setDetectOpen] = useState(false);
   const [detectText, setDetectText] = useState("");
-  const [detectModel, setDetectModel] = useState("");
-  const [detectModels, setDetectModels] = useState<Array<{ label: string; value: string }>>([]);
-  const [detectUseAI, setDetectUseAI] = useState(false);
   const [detectResult, setDetectResult] = useState<Row | null>(null);
   const [detectLoading, setDetectLoading] = useState(false);
   const [detectDetailOpen, setDetectDetailOpen] = useState(false);
@@ -1746,6 +2042,18 @@ export default function AiTextPage() {
   const [jobState, setJobState] = useState<DataState>(() => ({ ...buildPageState(), filters: { jobType: "all", status: "all", targetId: "" } }));
   const [corpusDetail, setCorpusDetail] = useState<Row | null>(null);
   const [corpusDetailLoading, setCorpusDetailLoading] = useState(false);
+  const [taskErrorDetail, setTaskErrorDetail] = useState<Row | null>(null);
+  const [sensitiveAddOpen, setSensitiveAddOpen] = useState(false);
+  const [sensitiveAddBusy, setSensitiveAddBusy] = useState(false);
+  const [sensitiveAddForm, setSensitiveAddForm] = useState({ word: "", replacement: "", remark: "", enabled: 1 });
+  const [sensitiveExtractOpen, setSensitiveExtractOpen] = useState(false);
+  const [sensitiveExtractBusy, setSensitiveExtractBusy] = useState(false);
+  const [sensitiveExtractContent, setSensitiveExtractContent] = useState("");
+  const [sensitiveExtractModel, setSensitiveExtractModel] = useState("");
+  const [sensitiveExtractModelOptions, setSensitiveExtractModelOptions] = useState<ModelOption[]>([]);
+  const [sensitiveExtractModelLoading, setSensitiveExtractModelLoading] = useState(false);
+  const [sensitiveExtractCandidates, setSensitiveExtractCandidates] = useState<string[]>([]);
+  const [sensitiveExtractResult, setSensitiveExtractResult] = useState<Row | null>(null);
   const detectPlatformChars = useMemo(() => countNovelPlatformChars(detectText), [detectText]);
   const detectSentenceCount = useMemo(() => countSentences(detectText), [detectText]);
 
@@ -1753,8 +2061,19 @@ export default function AiTextPage() {
     const resp = await postReq(endpoint, payload);
     if (resp.code === 0 || resp.code === undefined) {
       notify({ type: "success", title: "操作成功", message: success });
-      await Promise.all([loadTasks(true), loadSummary()]);
+      await loadTasks(true);
     }
+  };
+
+  const deleteTask = async (row: Row) => {
+    const confirmed = await confirmAction({
+      title: "确认删除任务",
+      message: "删除任务及其全部研究数据，且不可恢复，确认继续？",
+      confirmText: "确认删除",
+      tone: "danger"
+    });
+    if (!confirmed) return;
+    await tableAction("/check/aitext/task/delete", { id: row.id }, "任务已加入删除队列");
   };
 
   const updateTaskSource = async (row: Row, sourceType: string) => {
@@ -1765,13 +2084,97 @@ export default function AiTextPage() {
     }
   };
 
+  const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
+  const selectableTaskIds = useMemo(() => taskState.rows
+    .filter((row) => canExecute(row) || canStop(row) || canRollback(row))
+    .map((row) => String(row.id || ""))
+    .filter(Boolean), [taskState.rows]);
+  const selectedTaskRows = useMemo(() => taskState.rows.filter((row) => selectedTaskIdSet.has(String(row.id || ""))), [selectedTaskIdSet, taskState.rows]);
+  const executableSelectedRows = useMemo(() => selectedTaskRows.filter(canExecute), [selectedTaskRows]);
+  const stoppableSelectedRows = useMemo(() => selectedTaskRows.filter(canStop), [selectedTaskRows]);
+  const rollbackableSelectedRows = useMemo(() => selectedTaskRows.filter(canRollback), [selectedTaskRows]);
+  const currentPageAllSelected = selectableTaskIds.length > 0 && selectableTaskIds.every((id) => selectedTaskIdSet.has(id));
+  const toggleTaskSelected = (id: string, checked: boolean) => {
+    setSelectedTaskIds((ids) => {
+      if (checked) return ids.includes(id) ? ids : [...ids, id];
+      return ids.filter((item) => item !== id);
+    });
+  };
+  const toggleCurrentPageSelected = (checked: boolean) => {
+    setSelectedTaskIds((ids) => {
+      if (!checked) return ids.filter((id) => !selectableTaskIds.includes(id));
+      const next = new Set(ids);
+      selectableTaskIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  };
+
+  const loadSensitiveExtractModels = async () => {
+    setSensitiveExtractModelLoading(true);
+    try {
+      const [optionResp, modelResp] = await Promise.all([
+        postReq<ModelOption[]>("/check/chat/param/option", {}),
+        postReq<{ model?: string }>("/check/chat/param/model", {})
+      ]);
+      const options = Array.isArray(optionResp.data)
+        ? optionResp.data
+            .map((item) => ({
+              value: String(item.value || item.label || ""),
+              label: String(item.label || item.value || "")
+            }))
+            .filter((item) => item.value && item.label)
+        : [];
+      const defaultModel = String(modelResp.data?.model || "");
+      const hasDefault = defaultModel && options.some((item) => item.value === defaultModel);
+      const nextOptions = defaultModel && !hasDefault ? [{ value: defaultModel, label: defaultModel }, ...options] : options;
+      setSensitiveExtractModelOptions(nextOptions);
+      setSensitiveExtractModel((current) => current || defaultModel || nextOptions[0]?.value || "");
+      if (!nextOptions.length) {
+        notify({ type: "warning", title: "暂无模型", message: "请先在前台模型配置中添加并启用模型。" });
+      }
+    } finally {
+      setSensitiveExtractModelLoading(false);
+    }
+  };
+
   const taskColumns: Column[] = [
+    {
+      key: "selection",
+      title: "选择",
+      width: 52,
+      header: (
+        <span className="aitext-select-cell">
+          <input
+            type="checkbox"
+            aria-label="选择当前页任务"
+            checked={currentPageAllSelected}
+            disabled={!selectableTaskIds.length}
+            onChange={(event) => toggleCurrentPageSelected(event.target.checked)}
+          />
+        </span>
+      ),
+      render: (row) => {
+        const id = String(row.id || "");
+        const disabled = !id || !(canExecute(row) || canStop(row) || canRollback(row));
+        return (
+          <span className="aitext-select-cell">
+            <input
+              type="checkbox"
+              aria-label={`选择任务 ${id}`}
+              checked={selectedTaskIdSet.has(id)}
+              disabled={disabled}
+              onChange={(event) => toggleTaskSelected(id, event.target.checked)}
+            />
+          </span>
+        );
+      }
+    },
     { key: "id", title: "任务ID", width: 86 },
-    { key: "fileName", title: "文件", width: 300 },
+    { key: "fileName", title: "文件"},
     {
       key: "sourceType",
       title: "类型",
-      width: 110,
+      width: 120,
       render: (row) => {
         const locked = busyStatuses.has(String(row.status || "")) || Number(row.nextPageIndex || 0) > 0;
         return (
@@ -1802,7 +2205,7 @@ export default function AiTextPage() {
     },
     { key: "chunkType", title: "分块类型", width: 96, render: (row) => chunkTypeName(row.chunkType) },
     { key: "pageCount", title: "分块", width: 80 },
-    { key: "executionPoint", title: "执行位置", width: 210, render: executionPoint },
+    { key: "executionPoint", title: "执行位置", width: 230, render: executionPoint },
     { key: "pageTargetChars", title: "兜底字数", width: 100 },
     { key: "charCount", title: "字数", width: 95 },
     { key: "paragraphCount", title: "段落", width: 80 },
@@ -1810,24 +2213,32 @@ export default function AiTextPage() {
     { key: "wordCount", title: "词汇", width: 80 },
     { key: "patternCount", title: "句式", width: 80 },
     { key: "featureCount", title: "特征", width: 80 },
-    { key: "createdAt", title: "创建时间", width: 210, render: (row) => formatTime(row.createdAt ?? row.createTime) },
-    { key: "updatedAt", title: "更新时间", width: 210, render: (row) => formatTime(row.updatedAt ?? row.updateTime) },
-    { key: "errorMessage", title: "错误", width: 220 },
+    { key: "createdAt", title: "创建时间", width: 180, render: (row) => formatTime(row.createdAt ?? row.createTime) },
+    { key: "updatedAt", title: "更新时间", width: 180, render: (row) => formatTime(row.updatedAt ?? row.updateTime) },
+    {
+      key: "errorMessage",
+      title: "错误",
+      width: 120,
+      render: (row) => row.errorMessage ? <button onClick={() => setTaskErrorDetail(row)}>查看错误</button> : "-"
+    },
     {
       key: "action",
       title: "操作",
-      width: 360,
+      width: 410,
       render: (row) => (
         <div className="aitext-row-actions">
           <button disabled={!canExecute(row) || taskBusy} onClick={() => executeTask(row)}>
             开始执行
+          </button>
+          <button disabled={!canStop(row) || taskBusy} onClick={() => void stopTasks([String(row.id || "")])}>
+            停止
           </button>
           <button onClick={() => openChunkLog(row)}>块日志</button>
           {String(row.status) === "processing" ? <button onClick={() => void tableAction("/check/aitext/task/unlock", { id: row.id }, "任务已解锁")}>解锁</button> : null}
           <button disabled={!canRollback(row)} onClick={() => void tableAction("/check/aitext/task/rollback", { id: row.id }, "任务已加入撤回队列")}>
             撤回
           </button>
-          <button className="danger-text" disabled={!canDelete(row)} onClick={() => window.confirm("删除任务及其全部研究数据，且不可恢复，确认继续？") && void tableAction("/check/aitext/task/delete", { id: row.id }, "任务已加入删除队列")}>
+          <button className="danger-text" disabled={!canDelete(row)} onClick={() => void deleteTask(row)}>
             删除
           </button>
         </div>
@@ -1859,6 +2270,69 @@ export default function AiTextPage() {
           { key: "isLock", title: "锁定", render: (row) => <SwitchCell checked={row.isLock === 1} disabled={row.isBlacklist === 1} onChange={(checked) => updateFilterLike("word", row, "lock", checked)} /> },
           { key: "isBlacklist", title: "拉黑",  render: (row) => <SwitchCell checked={row.isBlacklist === 1} onChange={(checked) => updateFilterLike("word", row, "blacklist", checked)} /> },
           { key: "action", title: "操作", render: (row) => <button className="danger-text" onClick={() => void deleteWordPattern("word", row)}>删除</button> }
+        ]
+      },
+      detectionWord: {
+        key: "detectionWord",
+        label: "检测词汇",
+        endpoint: "/check/aitext/detection/word/page",
+        search: [
+          { key: "word", label: "词汇", placeholder: "搜索检测词汇" },
+          { key: "isFilter", label: "过滤", type: "select", options: [{ label: "全部", value: -1 }, { label: "保留", value: 0 }, { label: "过滤", value: 1 }] },
+          { key: "isBlacklist", label: "拉黑", type: "select", options: [{ label: "全部", value: -1 }, { label: "正常", value: 0 }, { label: "拉黑", value: 1 }] },
+          { key: "sourceBias", label: "来源", type: "select", options: [{ label: "全部来源", value: "all" }, { label: "AI偏高", value: "ai" }, { label: "人工偏高", value: "human" }, { label: "均衡", value: "neutral" }] }
+        ],
+        columns: [
+          { key: "word", title: "词汇" },
+          { key: "score", title: "检测分", width: 100, render: (row) => formatNumber(row.score) },
+          { key: "collectCount", title: "总次数", width: 90 },
+          { key: "aiCount", title: "AI次数", width: 90 },
+          { key: "humanCount", title: "人工次数", width: 100 },
+          { key: "aiFrequency", title: "AI频率", width: 100, render: (row) => formatNumber(row.aiFrequency) },
+          { key: "humanFrequency", title: "人工频率", width: 110, render: (row) => formatNumber(row.humanFrequency) },
+          { key: "frequencyDiff", title: "频率差", width: 100, render: (row) => <span className={Number(row.frequencyDiff) >= 0 ? "text-ai" : "text-human"}>{formatNumber(row.frequencyDiff)}</span> },
+          { key: "frequencyRatio", title: "频率比", width: 100, render: (row) => formatNumber(row.frequencyRatio) },
+          { key: "confidence", title: "置信度", width: 100, render: (row) => formatPercent(row.confidence) },
+          { key: "isFilter", title: "过滤", width: 100, render: (row) => <SwitchCell checked={row.isFilter === 1} disabled={row.isLock === 1 || row.isBlacklist === 1} onChange={(checked) => updateFilterLike("detectionWord", row, "filter", checked)} /> },
+          { key: "isLock", title: "锁定", width: 100, render: (row) => <SwitchCell checked={row.isLock === 1} disabled={row.isBlacklist === 1} onChange={(checked) => updateFilterLike("detectionWord", row, "lock", checked)} /> },
+          { key: "isBlacklist", title: "拉黑", width: 100, render: (row) => <SwitchCell checked={row.isBlacklist === 1} onChange={(checked) => updateFilterLike("detectionWord", row, "blacklist", checked)} /> },
+          { key: "action", title: "操作", width: 90, render: (row) => <button className="danger-text" onClick={() => void deleteWordPattern("detectionWord", row)}>删除</button> }
+        ]
+      },
+      sensitiveWord: {
+        key: "sensitiveWord",
+        label: "违规词",
+        endpoint: "/check/aitext/sensitive/word/page",
+        toolbarExtra: (
+          <>
+            <button onClick={() => {
+              setSensitiveAddForm({ word: "", replacement: "", remark: "", enabled: 1 });
+              setSensitiveAddOpen(true);
+            }}>
+              <Plus size={18} /> 新增
+            </button>
+            <button onClick={() => {
+              setSensitiveExtractContent("");
+              setSensitiveExtractModel("");
+              setSensitiveExtractCandidates([]);
+              setSensitiveExtractResult(null);
+              setSensitiveExtractOpen(true);
+            }}>
+              <WandSparkles size={18} /> AI提取
+            </button>
+          </>
+        ),
+        search: [
+          { key: "word", label: "违规词", placeholder: "搜索违规词" },
+          { key: "enabled", label: "启用", type: "select", options: [{ label: "全部", value: -1 }, { label: "启用", value: 1 }, { label: "停用", value: 0 }] }
+        ],
+        columns: [
+          { key: "word", title: "违规词" },
+          { key: "replacement", title: "建议替换", width: 180, render: (row) => formatText(row.replacement || "-") },
+          { key: "remark", title: "备注", width: 360, render: (row) => formatText(row.remark || "-") },
+          { key: "enabled", title: "启用", width: 100, render: (row) => <SwitchCell checked={row.enabled === 1} onChange={(checked) => updateSensitiveWordEnabled(row, checked)} /> },
+          { key: "updateTime", title: "更新时间", width: 180, render: (row) => formatTime(row.updateTime) },
+          { key: "action", title: "操作", width: 90, render: (row) => <button className="danger-text" onClick={() => void deleteWordPattern("sensitiveWord", row)}>删除</button> }
         ]
       },
       pattern: {
@@ -1902,6 +2376,51 @@ export default function AiTextPage() {
         { key: "frequencyDiff", title: "频率差", width: 100, render: (row) => <span className={Number(row.frequencyDiff) >= 0 ? "text-ai" : "text-human"}>{formatNumber(row.frequencyDiff)}</span> },
         { key: "effectSize", title: "效应量", width: 100, render: (row) => formatNumber(row.effectSize) },
         { key: "adjustedPValue", title: "FDR", width: 90, render: (row) => formatNumber(row.adjustedPValue, 4) }
+      ]),
+      baseline: dataset("baseline", "/check/aitext/baseline/page", "检测基准", [
+        { key: "metricKey", label: "指标", placeholder: "搜索指标" },
+        { key: "scopeType", label: "层级", type: "select", options: [{ label: "全部层级", value: "all" }, { label: "语料块", value: "corpus" }, { label: "段落", value: "paragraph" }, { label: "句子", value: "sentence" }] },
+        { key: "baselineVersion", label: "版本", placeholder: "默认 baseline-v2" }
+      ], [
+        { key: "scopeType", title: "层级", width: 90, render: (row) => scopeTypeName(row.scopeType) },
+        { key: "metricKey", title: "指标", width: 240, render: (row) => metricName(row.metricKey) },
+        { key: "scoreWeight", title: "评分权重", width: 100, render: (row) => formatPercent(row.scoreWeight) },
+        {
+          key: "direction",
+          title: "均值偏向",
+          width: 100,
+          render: (row) => {
+            const ai = Number(row.aiMeanValue || 0);
+            const human = Number(row.humanMeanValue || 0);
+            if (ai === human) return "-";
+            return <SmallBadge tone={ai > human ? "ai" : "human"}>{ai > human ? "AI高" : "人工高"}</SmallBadge>;
+          }
+        },
+        {
+          key: "useType",
+          title: "用途",
+          width: 110,
+          render: (row) => <SwitchCell checked={row.scoreEligible === true} onChange={(checked) => updateBaselineScoreEnabled(row, checked)} />
+        },
+        { key: "scoreReason", title: "原因"},
+        { key: "metricCode", title: "指标键", width: 260, render: (row) => formatText(row.metricKey) },
+        { key: "aiSampleCount", title: "AI样本", width: 100 },
+        { key: "humanSampleCount", title: "人工样本", width: 100 },
+        { key: "aiMeanValue", title: "AI均值", width: 100, render: (row) => formatNumber(row.aiMeanValue) },
+        { key: "humanMeanValue", title: "人工均值", width: 110, render: (row) => formatNumber(row.humanMeanValue) },
+        { key: "aiStdValue", title: "AI标准差", width: 110, render: (row) => formatNumber(row.aiStdValue) },
+        { key: "humanStdValue", title: "人工标准差", width: 120, render: (row) => formatNumber(row.humanStdValue) },
+        { key: "aiMedianValue", title: "AI中位", width: 100, render: (row) => formatNumber(row.aiMedianValue) },
+        { key: "humanMedianValue", title: "人工中位", width: 110, render: (row) => formatNumber(row.humanMedianValue) },
+        { key: "aiP05Value", title: "AI P05", width: 100, render: (row) => formatNumber(row.aiP05Value) },
+        { key: "aiP95Value", title: "AI P95", width: 100, render: (row) => formatNumber(row.aiP95Value) },
+        { key: "humanP05Value", title: "人工 P05", width: 110, render: (row) => formatNumber(row.humanP05Value) },
+        { key: "humanP95Value", title: "人工 P95", width: 110, render: (row) => formatNumber(row.humanP95Value) },
+        { key: "effectSize", title: "效应量", width: 100, render: (row) => formatNumber(row.effectSize) },
+        { key: "overlapScore", title: "重叠度", width: 100, render: (row) => formatPercent(row.overlapScore) },
+        { key: "importanceScore", title: "重要性", width: 100, render: (row) => formatPercent(row.importanceScore) },
+        { key: "baselineVersion", title: "版本", width: 130 },
+        { key: "updateTime", title: "更新时间", width: 180, render: (row) => formatTime(row.updateTime) }
       ]),
       corpus: dataset("corpus", "/check/aitext/novel/corpus/page", "语料", [
         { key: "docName", label: "文档", placeholder: "搜索文档" },
@@ -1955,8 +2474,8 @@ export default function AiTextPage() {
         { key: "documentCount", title: "文档数", width: 90 },
         { key: "analyzerVersions", title: "分析器版本"},
         { key: "errorMessage", title: "错误", width: 220 },
-        { key: "startedAt", title: "开始时间", width: 220, render: (row) => formatTime(row.startedAt) },
-        { key: "completedAt", title: "完成时间", width: 220, render: (row) => formatTime(row.completedAt) }
+        { key: "startedAt", title: "开始时间", width: 180, render: (row) => formatTime(row.startedAt) },
+        { key: "completedAt", title: "完成时间", width: 180, render: (row) => formatTime(row.completedAt) }
       ]),
       sentences: dataset("sentences", "/check/aitext/research/sentence/page", "句子", [
         { key: "taskId", label: "任务ID", placeholder: "任务ID" },
@@ -1970,22 +2489,7 @@ export default function AiTextPage() {
         { key: "sentenceIndex", title: "句序", width: 80 },
         { key: "textHash", title: "文本哈希"},
         { key: "metricsJson", title: "完整指标"},
-        { key: "createTime", title: "创建时间", width: 230, render: (row) => formatTime(row.createTime) }
-      ]),
-      metrics: dataset("metrics", "/check/aitext/research/metric/page", "指标", [
-        { key: "taskId", label: "任务ID", placeholder: "任务ID" },
-        { key: "corpusId", label: "语料ID", placeholder: "语料ID" },
-        { key: "scopeType", label: "层级", type: "select", options: [{ label: "全部层级", value: "all" }, { label: "语料", value: "corpus" }, { label: "段落", value: "paragraph" }, { label: "句子", value: "sentence" }] },
-        { key: "metricKey", label: "指标", placeholder: "指标" }
-      ], [
-        { key: "taskId", title: "任务ID" },
-        { key: "corpusId", title: "语料ID"},
-        { key: "analysisRunId", title: "运行ID"},
-        { key: "scopeType", title: "层级"},
-        { key: "scopeIndex", title: "层级序号"},
-        { key: "metricKey", title: "指标", render: (row) => metricName(row.metricKey) },
-        { key: "metricValue", title: "数值", render: (row) => formatNumber(row.metricValue) },
-        { key: "createTime", title: "创建时间", width: 220, render: (row) => formatTime(row.createTime) }
+        { key: "createTime", title: "创建时间", width: 180, render: (row) => formatTime(row.createTime) }
       ]),
       observations: dataset("observations", "/check/aitext/research/observation/page", "特征观察", [
         { key: "taskId", label: "任务ID", placeholder: "任务ID" },
@@ -2003,22 +2507,8 @@ export default function AiTextPage() {
         { key: "scopeType", title: "层级", width: 90 },
         { key: "featureId", title: "特征ID", width: 100 },
         { key: "analysisRunId", title: "运行ID", width: 100 },
-        { key: "createTime", title: "创建时间", render: (row) => formatTime(row.createTime) }
+        { key: "createTime", title: "创建时间", width: 180, render: (row) => formatTime(row.createTime) }
       ]),
-      experiments: {
-        key: "experiments",
-        label: "对比实验",
-        search: [],
-        columns: [],
-        split: [
-          { key: "comparisonRun", title: "实验运行", endpoint: "/check/aitext/research/comparison/run/page", columns: [
-            { key: "id", title: "ID", width: 90 }, { key: "taskId", title: "任务ID", width: 90 }, { key: "name", title: "名称", width: 180 }, { key: "leftCohortJson", title: "左侧队列", width: 240 }, { key: "rightCohortJson", title: "右侧队列", width: 240 }, { key: "pipelineVersion", title: "管线", width: 150 }, { key: "status", title: "状态", width: 90, render: (row) => taskStatusName(row.status) }, { key: "startedAt", title: "开始时间", width: 210, render: (row) => formatTime(row.startedAt) }, { key: "completedAt", title: "完成时间", width: 210, render: (row) => formatTime(row.completedAt) }
-          ], search: [{ key: "taskId", label: "任务ID", placeholder: "任务ID" }, { key: "name", label: "名称", placeholder: "实验名称" }, { key: "status", label: "状态", type: "select", options: [{ label: "全部状态", value: "all" }, { label: "完成", value: "completed" }, { label: "失败", value: "failed" }] }] },
-          { key: "comparisonResult", title: "实验结果", endpoint: "/check/aitext/research/comparison/result/page", columns: [
-            { key: "comparisonRunId", title: "实验ID", width: 100 }, { key: "resultType", title: "类型", width: 90 }, { key: "resultKey", title: "结果键", width: 280, render: (row) => metricName(row.resultKey) }, { key: "leftValue", title: "左值", width: 100, render: (row) => formatNumber(row.leftValue) }, { key: "rightValue", title: "右值", width: 100, render: (row) => formatNumber(row.rightValue) }, { key: "effectSize", title: "效应量", width: 100, render: (row) => formatNumber(row.effectSize) }, { key: "pValue", title: "P值", width: 100, render: (row) => formatNumber(row.pValue, 4) }, { key: "adjustedPValue", title: "FDR", width: 100, render: (row) => formatNumber(row.adjustedPValue, 4) }, { key: "taskId", title: "任务ID", width: 90 }
-          ], search: [{ key: "comparisonRunId", label: "实验ID", placeholder: "实验ID" }, { key: "resultType", label: "类型", type: "select", options: [{ label: "全部类型", value: "all" }, { label: "特征", value: "feature" }, { label: "指标", value: "metric" }] }, { key: "name", label: "结果键", placeholder: "结果键" }] }
-        ]
-      },
       lexicons: {
         key: "lexicons",
         label: "研究词库",
@@ -2026,27 +2516,13 @@ export default function AiTextPage() {
         columns: [],
         split: [
           { key: "lexicon", title: "词库版本", endpoint: "/check/aitext/research/lexicon/page", columns: [
-            { key: "id", title: "ID", width: 90 }, { key: "taskId", title: "任务ID", width: 90 }, { key: "lexiconKey", title: "词库键", width: 180 }, { key: "name", title: "名称", width: 180 }, { key: "version", title: "版本", width: 100 }, { key: "description", title: "说明", width: 360 }, { key: "createTime", title: "创建时间", width: 210, render: (row) => formatTime(row.createTime) }
+            { key: "id", title: "ID", width: 90 }, { key: "taskId", title: "任务ID", width: 90 }, { key: "lexiconKey", title: "词库键", width: 180 }, { key: "name", title: "名称", width: 180 }, { key: "version", title: "版本", width: 100 }, { key: "description", title: "说明", width: 360 }, { key: "createTime", title: "创建时间", width: 180, render: (row) => formatTime(row.createTime) }
           ], search: [{ key: "name", label: "词库", placeholder: "词库名称或键" }] },
           { key: "lexiconEntry", title: "词库条目", endpoint: "/check/aitext/research/lexicon/entry/page", columns: [
             { key: "id", title: "ID", width: 90 }, { key: "lexiconId", title: "词库ID", width: 100 }, { key: "lexiconName", title: "词库", width: 180 }, { key: "entryText", title: "条目", width: 260 }, { key: "weight", title: "权重", width: 100, render: (row) => formatNumber(row.weight) }, { key: "metadataJson", title: "元数据", width: 360 }, { key: "taskId", title: "任务ID", width: 90 }
           ], search: [{ key: "lexiconId", label: "词库ID", placeholder: "词库ID" }, { key: "name", label: "条目", placeholder: "搜索条目" }] }
         ]
-      },
-      embeddings: dataset("embeddings", "/check/aitext/research/embedding/page", "向量", [
-        { key: "taskId", label: "任务ID", placeholder: "任务ID" },
-        { key: "corpusId", label: "语料ID", placeholder: "语料ID" },
-        { key: "modelName", label: "模型", placeholder: "模型名称" }
-      ], [
-        { key: "taskId", title: "任务ID", width: 90 }, { key: "corpusId", title: "语料ID", width: 100 }, { key: "scopeType", title: "层级", width: 90 }, { key: "scopeIndex", title: "序号", width: 80 }, { key: "modelName", title: "模型", width: 180 }, { key: "modelVersion", title: "模型版本", width: 130 }, { key: "vectorId", title: "向量ID", width: 220 }, { key: "contentHash", title: "内容哈希", width: 220 }, { key: "createTime", title: "创建时间", width: 210, render: (row) => formatTime(row.createTime) }
-      ]),
-      duplicates: dataset("duplicates", "/check/aitext/research/duplicate/page", "重复", [
-        { key: "taskId", label: "任务ID", placeholder: "任务ID" },
-        { key: "corpusId", label: "语料ID", placeholder: "语料ID" },
-        { key: "duplicateType", label: "类型", type: "select", options: [{ label: "全部类型", value: "all" }, { label: "精确重复", value: "exact" }, { label: "MinHash", value: "minhash" }, { label: "模糊重复", value: "fuzzy" }, { label: "语义重复", value: "semantic" }] }
-      ], [
-        { key: "leftTaskId", title: "左任务", width: 90 }, { key: "rightTaskId", title: "右任务", width: 90 }, { key: "leftCorpusId", title: "左语料", width: 100 }, { key: "rightCorpusId", title: "右语料", width: 100 }, { key: "id", title: "ID", width: 90 }, { key: "duplicateType", title: "重复类型", width: 120 }, { key: "similarity", title: "相似度", width: 100, render: (row) => formatNumber(row.similarity) }, { key: "evidenceJson", title: "痕迹", width: 360 }, { key: "createTime", title: "创建时间", width: 210, render: (row) => formatTime(row.createTime) }
-      ])
+      }
     }),
     []
   );
@@ -2085,13 +2561,21 @@ export default function AiTextPage() {
     const fallback = comparableMetricRows.filter((item) => !preferred.some((row) => row.metricKey === item.metricKey));
     return [...preferred, ...fallback].slice(0, 8);
   }, [comparableMetricRows]);
-  const fullRadarRows = useMemo(() => comparableMetricRows.slice(0, 48), [comparableMetricRows]);
+  const scoringRadarRows = useMemo<Row[]>(() => dedupeMetricRowsByDisplayName(baselineRows
+    .filter((item) => item.scoreEligible === true && Number(item.scoreWeight || 0) > 0)
+    .sort((a, b) => Number(b.scoreWeight || 0) - Number(a.scoreWeight || 0))
+    .map((item): Row => ({
+      ...item,
+      metricName: metricName(metricKeyWithoutScope(item.metricKey)),
+      displayName: scoringMetricDisplayName(item),
+      aiAverage: item.aiMeanValue,
+      humanAverage: item.humanMeanValue
+    })), true), [baselineRows]);
   const coverageRows = useMemo(() => [
     { label: "段落事实覆盖", value: safeRatio(dataAssetMap.paragraphs, globalTotals.paragraphs), detail: `${dataAssetMap.paragraphs || 0} / ${globalTotals.paragraphs}` },
     { label: "句子事实覆盖", value: safeRatio(dataAssetMap.sentences, globalTotals.sentences), detail: `${dataAssetMap.sentences || 0} / ${globalTotals.sentences}` },
     { label: "任务完成率", value: safeRatio(taskStatusMapData.completed, dataAssetMap.tasks), detail: `${taskStatusMapData.completed || 0} / ${dataAssetMap.tasks || 0}` },
-    { label: "分析成功率", value: safeRatio(runStatusMapData.completed, dataAssetMap.analysisRuns), detail: `${runStatusMapData.completed || 0} / ${dataAssetMap.analysisRuns || 0}` },
-    { label: "向量覆盖率", value: safeRatio(dataAssetMap.embeddings, globalTotals.corpus), detail: `${dataAssetMap.embeddings || 0} / ${globalTotals.corpus}` }
+    { label: "分析成功率", value: safeRatio(runStatusMapData.completed, dataAssetMap.analysisRuns), detail: `${runStatusMapData.completed || 0} / ${dataAssetMap.analysisRuns || 0}` }
   ], [dataAssetMap, globalTotals, taskStatusMapData, runStatusMapData]);
 
   const loadTasks = async (silent = false, pageOverride?: PageState, filtersOverride?: Record<string, string | number>) => {
@@ -2111,28 +2595,32 @@ export default function AiTextPage() {
     setSummaryLoading(true);
     try {
       const resp = await postReq<Row>("/check/aitext/novel/summary", {});
-      if (resp.code === 0 || resp.code === undefined) setSummary((resp.data || {}) as Row);
+      if (resp.code === 0 || resp.code === undefined) {
+        setSummary((resp.data || {}) as Row);
+      }
     } finally {
       setSummaryLoading(false);
     }
   };
 
-  const refreshSummary = async () => {
-    setSummaryRefreshing(true);
-    try {
-      const resp = await postReq<Row>("/check/aitext/novel/summary/refresh", {});
-      if (resp.code === 0 || resp.code === undefined) {
-        setSummary((resp.data || {}) as Row);
-        notify({ type: "success", title: "缓存已刷新", message: "全局与可视化数据已更新" });
-      }
-    } finally {
-      setSummaryRefreshing(false);
-    }
-  };
-
   const loadBaseline = async () => {
-    const resp = await postReq<Row>("/check/aitext/baseline/status", {});
-    if (resp.code === 0 || resp.code === undefined) setBaseline((resp.data || {}) as Row);
+    const pageSize = 1000;
+    const [statusResp, pageResp] = await Promise.all([
+      postReq<Row>("/check/aitext/baseline/status", {}),
+      postReq("/check/aitext/baseline/page", { pageNum: 1, pageSize })
+    ]);
+    if (statusResp.code === 0 || statusResp.code === undefined) {
+      setBaseline((statusResp.data || {}) as Row);
+    }
+    const firstPage = normalizeRows(pageResp as never);
+    const rows = [...firstPage.rows];
+    for (let pageNum = 2; rows.length < firstPage.total; pageNum += 1) {
+      const resp = await postReq("/check/aitext/baseline/page", { pageNum, pageSize });
+      const normalized = normalizeRows(resp as never);
+      if (!normalized.rows.length) break;
+      rows.push(...normalized.rows);
+    }
+    setBaselineRows(rows);
   };
 
   const rebuildBaseline = async () => {
@@ -2141,7 +2629,7 @@ export default function AiTextPage() {
     try {
       const resp = await postReq<Row>("/check/aitext/baseline/rebuild", {});
       if (resp.code === 0 || resp.code === undefined) {
-        notify({ type: "success", title: "检测基准已重建", message: `指标 ${formatText((resp.data as Row)?.metricCount)} 项` });
+        notify({ type: "success", title: "检测基准已重建", message: `基准 ${formatText((resp.data as Row)?.metricCount)} 项，参与评分 ${formatText((resp.data as Row)?.scoringMetricCount || 0)} 项` });
         await loadBaseline();
       }
     } finally {
@@ -2181,12 +2669,14 @@ export default function AiTextPage() {
   };
 
   const setTaskFilter = (key: string, value: string | number) => {
+    setSelectedTaskIds([]);
     setTaskState((state) => ({ ...state, page: { ...state.page, pageNum: 1 }, filters: { ...state.filters, [key]: value } }));
   };
 
   const resetTaskFilters = () => {
     const filters = { fileName: "", sourceType: "all", status: "all" };
     const page = { ...taskState.page, pageNum: 1 };
+    setSelectedTaskIds([]);
     setTaskState((state) => ({ ...state, page, filters }));
     void loadTasks(false, page, filters);
   };
@@ -2202,36 +2692,89 @@ export default function AiTextPage() {
   const executeTask = async (row: Row) => {
     setTaskBusy(true);
     try {
-      const resp = await postReq<Row>("/check/aitext/task/execute", { id: row.id, batchPages, concurrency });
+      const resp = await postReq<Row>("/check/aitext/task/execute", { id: row.id, batchPages, concurrency: taskConcurrency });
       if (resp.code === 0 || resp.code === undefined) {
         notify({ type: "success", title: "任务已提交", message: (resp.data as Row)?.finished ? "处理完成" : "已加入执行队列" });
-        await Promise.all([loadTasks(true), loadSummary()]);
+        await loadTasks(true);
       }
+    } catch {
+      await loadTasks(true);
     } finally {
       setTaskBusy(false);
     }
   };
 
   const executeAll = async () => {
+    const ids = executableSelectedRows.map((row) => String(row.id || "")).filter(Boolean);
+    if (!ids.length) {
+      notify({ type: "warning", title: "请选择任务", message: "请勾选可执行的任务" });
+      return;
+    }
     setTaskBusy(true);
     try {
-      const resp = await postReq<Row>("/check/aitext/task/execute/all", { ...cleanPayload(taskState.filters, taskState.page), batchPages, concurrency });
+      const resp = await postReq<Row>("/check/aitext/task/execute/all", { ids, batchPages, concurrency: taskConcurrency });
       if (resp.code === 0 || resp.code === undefined) {
         notify({ type: "success", title: "一键执行", message: `已加入执行队列：${formatText((resp.data as Row)?.count || 0)} 个任务` });
+        setSelectedTaskIds([]);
+        await loadTasks(true);
+      }
+    } catch {
+      await loadTasks(true);
+    } finally {
+      setTaskBusy(false);
+    }
+  };
+
+  const stopTasks = async (ids: string[]) => {
+    const targetIds = ids.filter(Boolean);
+    if (!targetIds.length) {
+      notify({ type: "warning", title: "请选择任务", message: "请勾选排队中、执行中、等待撤回或撤回中的任务" });
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: "确认停止执行",
+      message: `会停止 ${targetIds.length} 个任务。排队任务会回到待执行，执行中任务会在当前批次完成后停在断点；等待撤回会取消，撤回中会尽量在清理前安全停止。`,
+      confirmText: "确认停止",
+      tone: "danger"
+    });
+    if (!confirmed) return;
+    setTaskBusy(true);
+    try {
+      const resp = await postReq<Row>("/check/aitext/task/stop/all", { ids: targetIds });
+      if (resp.code === 0 || resp.code === undefined) {
+        notify({ type: "success", title: "停止执行", message: `已处理：${formatText((resp.data as Row)?.count || 0)} 个任务` });
+        setSelectedTaskIds((old) => old.filter((id) => !targetIds.includes(id)));
         await loadTasks(true);
       }
     } finally {
       setTaskBusy(false);
     }
+  };
+
+  const stopAll = async () => {
+    const ids = stoppableSelectedRows.map((row) => String(row.id || "")).filter(Boolean);
+    await stopTasks(ids);
   };
 
   const rollbackAll = async () => {
-    if (!window.confirm("会把当前筛选下所有可撤回任务加入撤回队列，确认继续？")) return;
+    const ids = rollbackableSelectedRows.map((row) => String(row.id || "")).filter(Boolean);
+    if (!ids.length) {
+      notify({ type: "warning", title: "请选择任务", message: "请勾选可撤回的任务" });
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: "确认撤回任务",
+      message: `会把选中的 ${ids.length} 个可撤回任务加入撤回队列，确认继续？`,
+      confirmText: "确认撤回",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     setTaskBusy(true);
     try {
-      const resp = await postReq<Row>("/check/aitext/task/rollback/all", { ...cleanPayload(taskState.filters, taskState.page), batchPages, concurrency });
+      const resp = await postReq<Row>("/check/aitext/task/rollback/all", { ids, batchPages, concurrency: taskConcurrency });
       if (resp.code === 0 || resp.code === undefined) {
         notify({ type: "success", title: "一键撤回", message: `已加入撤回队列：${formatText((resp.data as Row)?.count || 0)} 个任务` });
+        setSelectedTaskIds([]);
         await loadTasks(true);
       }
     } finally {
@@ -2239,11 +2782,57 @@ export default function AiTextPage() {
     }
   };
 
-  const uploadTasks = async () => {
-    if (!uploadFiles.length) {
-      notify({ type: "warning", title: "请选择文档", message: "支持 txt、md、docx、pdf" });
-      return;
+  const clearAllAiTextData = async () => {
+    if (taskBusy) return;
+    setTaskBusy(true);
+    try {
+      const resp = await postReq<Row>("/check/aitext/task/clear-all", {});
+      if (resp.code === 0 || resp.code === undefined) {
+        notify({ type: "success", title: "一键清空", message: `已清空 ${formatText((resp.data as Row)?.count || 0)} 张文本分析表` });
+        setClearConfirmOpen(false);
+        setClearConfirmText("");
+        setSelectedTaskIds([]);
+        setSummary({});
+        await loadTasks(true);
+      }
+    } finally {
+      setTaskBusy(false);
     }
+  };
+
+  const dedupeUploadFiles = async () => {
+    const checkForm = new FormData();
+    uploadFiles.forEach((file) => checkForm.append("files", file));
+    checkForm.append("pageTargetChars", String(uploadChars));
+    checkForm.append("checkOnly", "true");
+    const checkResp = await uploadRecord("/check/aitext/task/create", checkForm);
+    if (checkResp.code !== 0 && checkResp.code !== undefined) return false;
+
+    const checkRows = asRows((checkResp.data as Row)?.list);
+    const acceptedNameCount = new Map<string, number>();
+    checkRows.forEach((item) => {
+      if (!item.accepted) return;
+      const name = String(item.fileName || "");
+      acceptedNameCount.set(name, (acceptedNameCount.get(name) || 0) + 1);
+    });
+    const acceptedFiles = uploadFiles.filter((file) => {
+      const count = acceptedNameCount.get(file.name) || 0;
+      if (count <= 0) return false;
+      acceptedNameCount.set(file.name, count - 1);
+      return true;
+    });
+    const skippedRows = checkRows.filter((item) => !item.accepted);
+    setUploadFiles(acceptedFiles);
+    setUploadDeduped(acceptedFiles.length > 0);
+    notify({
+      type: skippedRows.length ? (acceptedFiles.length ? "warning" : "info") : "success",
+      title: skippedRows.length ? "已过滤重复文档" : "去重完成",
+      message: skippedRows.length ? `过滤 ${skippedRows.length} 个，保留 ${acceptedFiles.length} 个新文档` : `保留 ${acceptedFiles.length} 个新文档`
+    });
+    return acceptedFiles.length > 0;
+  };
+
+  const createUploadTasks = async () => {
     const form = new FormData();
     uploadFiles.forEach((file) => form.append("files", file));
     form.append("pageTargetChars", String(uploadChars));
@@ -2253,25 +2842,24 @@ export default function AiTextPage() {
       notify({ type: "success", title: "任务已创建", message: `已创建 ${Array.isArray(resp.data) ? resp.data.length : 0} 个文件任务` });
       setUploadOpen(false);
       setUploadFiles([]);
+      setUploadDeduped(false);
       await loadTasks(true);
     }
   };
 
-  const loadDetectModels = async () => {
-    const [optionResp, defaultResp] = await Promise.all([postReq<unknown[]>("/check/chat/param/option", {}), postReq<Row>("/check/chat/param/model", {})]);
-    if (optionResp.code === 0 || optionResp.code === undefined) {
-      const models = (Array.isArray(optionResp.data) ? optionResp.data : [])
-        .map((item) => {
-          if (typeof item === "string") return { label: item, value: item };
-          const row = item as Row;
-          const value = String(row.value || row.model || row.name || "");
-          return value ? { label: String(row.label || row.model || row.name || value), value } : null;
-        })
-        .filter(Boolean) as Array<{ label: string; value: string }>;
-      setDetectModels(models);
+  const uploadTasks = async () => {
+    if (uploadBusy) return;
+    if (!uploadFiles.length) {
+      notify({ type: "warning", title: "请选择文档", message: "支持 txt、md、docx、pdf" });
+      return;
     }
-    const model = String((defaultResp.data as Row)?.model || "");
-    if (model) setDetectModel(model);
+    setUploadBusy(true);
+    try {
+      if (!uploadDeduped) await dedupeUploadFiles();
+      else await createUploadTasks();
+    } finally {
+      setUploadBusy(false);
+    }
   };
 
   const runDetect = async () => {
@@ -2283,10 +2871,7 @@ export default function AiTextPage() {
     setDetectLoading(true);
     try {
       const resp = await postReq<Row>("/check/aitext/detect", {
-        content: detectText.trim(),
-        useAIEnhance: detectUseAI && Boolean(detectModel),
-        aiModel: detectModel,
-        aiThinking: "disabled"
+        content: detectText
       });
       if (resp.code === 0 || resp.code === undefined) setDetectResult((resp.data || {}) as Row);
     } finally {
@@ -2338,17 +2923,184 @@ export default function AiTextPage() {
     }
   }
 
-  const updateFilterLike = async (type: "word" | "pattern", row: Row, action: "filter" | "lock" | "blacklist", checked: boolean) => {
+  const patchDatasetRow = (key: "word" | "detectionWord" | "sensitiveWord" | "pattern", row: Row, patch: Row, sortBlacklisted = false) => {
+    const rowId = String(row.id || "");
+    setDatasets((old) => {
+      const state = old[key] || buildPageState();
+      const rows = state.rows.map((item) => (String(item.id || "") === rowId ? { ...item, ...patch } : item));
+      return {
+        ...old,
+        [key]: {
+          ...state,
+          rows: sortBlacklisted ? sortDetectionWordRows(rows) : rows
+        }
+      };
+    });
+  };
+
+  const patchBaselineRow = (source: Row, next: Row) => {
+    setBaselineRows((rows) => sortBaselineRowsByScoreWeight(rows.map((item) => (baselineRowMatches(item, source) ? { ...item, ...next } : item))));
+    setDatasets((old) => {
+      const state = old.baseline || buildPageState();
+      return {
+        ...old,
+        baseline: {
+          ...state,
+          rows: sortBaselineRowsByScoreWeight(state.rows.map((item) => (baselineRowMatches(item, source) ? { ...item, ...next } : item)))
+        }
+      };
+    });
+  };
+
+  const updateBaselineScoreEnabled = async (row: Row, checked: boolean) => {
+    const resp = await postReq<Row>("/check/aitext/baseline/score-enabled", {
+      baselineVersion: baselineVersionOf(row),
+      scopeType: row.scopeType,
+      metricKey: row.metricKey,
+      scoreEnabled: checked ? 1 : 0
+    });
+    if (resp.code === 0 || resp.code === undefined) {
+      patchBaselineRow(row, (resp.data || { scoreEnabled: checked ? 1 : 0, scoreEligible: checked, useType: checked ? "参与评分" : "仅观察" }) as Row);
+    }
+  };
+
+  const clearDetectReport = () => {
+    setDetectText("");
+    setDetectResult(null);
+    setDetectDetailOpen(false);
+  };
+
+  const updateFilterLike = async (type: "word" | "detectionWord" | "pattern", row: Row, action: "filter" | "lock" | "blacklist", checked: boolean) => {
     const keyMap = { filter: "isFilter", lock: "isLock", blacklist: "isBlacklist" };
-    const endpoint = `/check/aitext/${type}/${action}`;
+    const endpointType = type === "detectionWord" ? "detection/word" : type;
+    const endpoint = `/check/aitext/${endpointType}/${action}`;
     const resp = await postReq(endpoint, { id: row.id, [keyMap[action]]: checked ? 1 : 0 });
+    if (resp.code === 0 || resp.code === undefined) {
+      patchDatasetRow(type, row, { [keyMap[action]]: checked ? 1 : 0 }, type === "detectionWord" && action === "blacklist");
+    }
+  };
+
+  const updateSensitiveWordEnabled = async (row: Row, checked: boolean) => {
+    const resp = await postReq("/check/aitext/sensitive/word/enabled", { id: row.id, enabled: checked ? 1 : 0 });
+    if (resp.code === 0 || resp.code === undefined) {
+      patchDatasetRow("sensitiveWord", row, { enabled: checked ? 1 : 0 });
+    }
+  };
+
+  const saveSensitiveWord = async () => {
+    const word = sensitiveAddForm.word.trim();
+    if (!word) {
+      notify({ type: "warning", title: "违规词为空", message: "请先填写违规词。" });
+      return;
+    }
+    setSensitiveAddBusy(true);
+    try {
+      const resp = await postReq("/check/aitext/sensitive/word/save", {
+        word,
+        replacement: sensitiveAddForm.replacement.trim(),
+        remark: sensitiveAddForm.remark.trim(),
+        enabled: sensitiveAddForm.enabled
+      });
+      if (resp.code === 0 || resp.code === undefined) {
+        notify({ type: "success", title: "新增成功", message: "违规词已保存。" });
+        setSensitiveAddOpen(false);
+        await loadDataset("sensitiveWord", datasetConfigs.sensitiveWord, false);
+      }
+    } finally {
+      setSensitiveAddBusy(false);
+    }
+  };
+
+  const deleteWordPattern = async (type: "word" | "detectionWord" | "sensitiveWord" | "pattern", row: Row) => {
+    const label = type === "pattern" ? "句式" : type === "detectionWord" ? "检测词汇" : type === "sensitiveWord" ? "违规词" : "词汇";
+    const confirmed = await confirmAction({
+      title: `确认删除${label}`,
+      message: `将删除该${label}，此操作不可撤销。`,
+      confirmText: "确认删除",
+      tone: "danger"
+    });
+    if (!confirmed) return;
+    const endpointType = type === "detectionWord" ? "detection/word" : type === "sensitiveWord" ? "sensitive/word" : type;
+    const resp = await postReq(`/check/aitext/${endpointType}/delete`, { id: row.id });
     if (resp.code === 0 || resp.code === undefined) await loadDataset(type, datasetConfigs[type], false);
   };
 
-  const deleteWordPattern = async (type: "word" | "pattern", row: Row) => {
-    if (!window.confirm(`确认删除${type === "word" ? "词汇" : "句式"}?`)) return;
-    const resp = await postReq(`/check/aitext/${type}/delete`, { id: row.id });
-    if (resp.code === 0 || resp.code === undefined) await loadDataset(type, datasetConfigs[type], false);
+  const normalizeSensitiveCandidates = (values: string[]) => {
+    const seen = new Set<string>();
+    return values
+      .flatMap((value) => value.split(/[\n\r,，、;；]+/))
+      .map((item) => item.trim())
+      .filter((item) => {
+        if (!item || seen.has(item)) return false;
+        seen.add(item);
+        return true;
+      });
+  };
+
+  const updateSensitiveCandidate = (index: number, value: string) => {
+    setSensitiveExtractCandidates((items) => items.map((item, itemIndex) => (itemIndex === index ? value : item)));
+  };
+
+  const removeSensitiveCandidate = (index: number) => {
+    setSensitiveExtractCandidates((items) => items.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const extractSensitiveWords = async () => {
+    if (!sensitiveExtractContent.trim()) {
+      notify({ type: "warning", title: "内容为空", message: "请先粘贴需要提取的审核清单。" });
+      return;
+    }
+    setSensitiveExtractBusy(true);
+    setSensitiveExtractResult(null);
+    setSensitiveExtractCandidates([]);
+    try {
+      const resp = await postReq<Row>("/check/aitext/sensitive/word/ai-extract", {
+        content: sensitiveExtractContent,
+        model: sensitiveExtractModel
+      });
+      if (resp.code === 0 || resp.code === undefined) {
+        const data = (resp.data || {}) as Row;
+        const candidateWords = normalizeSensitiveCandidates(Array.isArray(data.candidateWords) ? data.candidateWords.map((item) => String(item)) : []);
+        setSensitiveExtractResult(data);
+        setSensitiveExtractCandidates(candidateWords);
+        notify({
+          type: "success",
+          title: "提取完成",
+          message: `候选 ${formatText(data.candidateCount || candidateWords.length)} 个，已存在 ${formatText(data.existingCount || 0)} 个。`
+        });
+      }
+    } finally {
+      setSensitiveExtractBusy(false);
+    }
+  };
+
+  const saveSensitiveExtractWords = async () => {
+    const words = normalizeSensitiveCandidates(sensitiveExtractCandidates);
+    if (!words.length) {
+      notify({ type: "warning", title: "候选为空", message: "请先保留至少一个需要保存的违规词。" });
+      return;
+    }
+    setSensitiveExtractBusy(true);
+    try {
+      const resp = await postReq<Row>("/check/aitext/sensitive/word/batch-save", {
+        words,
+        remark: "AI提取违规词",
+        enabled: 1
+      });
+      if (resp.code === 0 || resp.code === undefined) {
+        const data = (resp.data || {}) as Row;
+        setSensitiveExtractResult(data);
+        notify({
+          type: "success",
+          title: "保存完成",
+          message: `新增 ${formatText(data.createdCount || 0)} 个，已存在 ${formatText(data.existingCount || 0)} 个。`
+        });
+        await loadDataset("sensitiveWord", datasetConfigs.sensitiveWord, false);
+        setSensitiveExtractOpen(false);
+      }
+    } finally {
+      setSensitiveExtractBusy(false);
+    }
   };
 
   const reloadActive = async (key = activeTab) => {
@@ -2367,13 +3119,26 @@ export default function AiTextPage() {
   }, [activeTab]);
 
   useEffect(() => {
-    void Promise.all([loadTasks(), loadSummary(), loadBaseline(), loadDetectModels()]);
+    setSelectedTaskIds((ids) => {
+      const visibleIds = new Set(taskState.rows.map((row) => String(row.id || "")).filter(Boolean));
+      const next = ids.filter((id) => visibleIds.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [taskState.rows]);
+
+  useEffect(() => {
+    void Promise.all([loadTasks(), loadBaseline()]);
   }, []);
+
+  useEffect(() => {
+    if (!sensitiveExtractOpen) return;
+    void loadSensitiveExtractModels();
+  }, [sensitiveExtractOpen]);
 
   useEffect(() => {
     if (!taskState.rows.some((row) => activeStatuses.has(String(row.status || "")))) return;
     const timer = window.setInterval(() => {
-      void Promise.all([loadTasks(true), loadSummary()]);
+      void loadTasks(true);
     }, 3000);
     return () => window.clearInterval(timer);
   }, [taskState.rows]);
@@ -2391,13 +3156,13 @@ export default function AiTextPage() {
         <button className="primary-button" onClick={openDetectModal}>
           <Bot size={18} /> AI检测
         </button>
-        <button onClick={() => setUploadOpen(true)}>
+        <button onClick={() => { setUploadFiles([]); setUploadDeduped(false); setUploadOpen(true); }}>
           <Upload size={18} /> 上传文档采集
         </button>
         <button onClick={() => setBaselineConfirmOpen(true)} disabled={baselineLoading}>
           {baselineLoading ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />} 重建检测基准
         </button>
-        <SmallBadge tone={baseline.ready ? "success" : "running"}>{baseline.ready ? `基准 ${formatText(baseline.metricCount || 0)} 项` : "基准不足"}</SmallBadge>
+        <SmallBadge tone={baseline.ready ? "success" : "running"}>{baseline.ready ? `基准 ${formatText(baseline.metricCount || 0)} 项 · 评分 ${formatText(baseline.scoringMetricCount || 0)} 项` : "基准不足"}</SmallBadge>
       </section>
 
       <nav className="aitext-tabs">
@@ -2416,16 +3181,23 @@ export default function AiTextPage() {
                 每批块数 <input type="number" min={1} max={3} value={batchPages} onChange={(event) => setBatchPages(Number(event.target.value || 1))} />
               </label>
               <label className="aitext-inline-number">
-                串行 <input type="number" min={1} max={1} value={concurrency} disabled />
+                同时任务数 <input type="number" min={1} max={3} value={taskConcurrency} onChange={(event) => setTaskConcurrency(Number(event.target.value || 1))} />
               </label>
               <button onClick={() => void loadTasks()}>
                 <RefreshCw size={18} /> 刷新
               </button>
+              <span className="aitext-selected-count">已选 {selectedTaskRows.length} 个</span>
               <button className="primary-button" disabled={taskBusy} onClick={() => void executeAll()}>
-                一键执行
+                执行选中{executableSelectedRows.length ? ` ${executableSelectedRows.length}` : ""}
+              </button>
+              <button disabled={taskBusy} onClick={() => void stopAll()}>
+                停止执行{stoppableSelectedRows.length ? ` ${stoppableSelectedRows.length}` : ""}
               </button>
               <button disabled={taskBusy} onClick={() => void rollbackAll()}>
-                一键撤回
+                撤回选中{rollbackableSelectedRows.length ? ` ${rollbackableSelectedRows.length}` : ""}
+              </button>
+              <button className="danger-text" disabled={taskBusy} onClick={() => { setClearConfirmText(""); setClearConfirmOpen(true); }}>
+                一键清空
               </button>
               <button onClick={() => void loadJobs()}>作业记录</button>
             </SearchBar>
@@ -2435,6 +3207,7 @@ export default function AiTextPage() {
               loading={taskState.loading}
               page={taskState.page}
               onPage={(page) => {
+                setSelectedTaskIds([]);
                 setTaskState((state) => ({ ...state, page }));
                 void loadTasks(false, page);
               }}
@@ -2444,10 +3217,7 @@ export default function AiTextPage() {
         ) : activeTab === "dashboard" ? (
           <section className="aitext-dashboard">
             <div className="aitext-cache-row">
-              <span>缓存：{summary.cacheUpdatedAt ? formatTime(summary.cacheUpdatedAt) : "未生成"}</span>
-              <button disabled={summaryRefreshing} onClick={() => void refreshSummary()}>
-                {summaryRefreshing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />} 刷新缓存
-              </button>
+              <span>累计更新：{summary.cacheUpdatedAt ? formatTime(summary.cacheUpdatedAt) : "暂无数据"}</span>
             </div>
             <div className="aitext-kpi-grid">
               {dashboardKpis.map((item) => (
@@ -2562,10 +3332,7 @@ export default function AiTextPage() {
         ) : activeTab === "visualization" ? (
           <section className="aitext-visualization">
             <div className="aitext-cache-row">
-              <span>缓存：{summary.cacheUpdatedAt ? formatTime(summary.cacheUpdatedAt) : "未生成"}</span>
-              <button disabled={summaryRefreshing} onClick={() => void refreshSummary()}>
-                <RefreshCw size={18} /> 刷新缓存
-              </button>
+              <span>累计更新：{summary.cacheUpdatedAt ? formatTime(summary.cacheUpdatedAt) : "暂无数据"}</span>
             </div>
             <div className="aitext-chart-grid">
               <section className="aitext-panel">
@@ -2584,16 +3351,16 @@ export default function AiTextPage() {
                 {radarRows.length ? <MetricRadarD3 rows={radarRows} zoomed={radarZoomed} /> : <div className="aitext-empty">暂无可比较指标</div>}
               </section>
               <section className={`aitext-panel ${radarZoomed ? "radar-zoomed" : ""}`}>
-                <RadarTitle zoomed={radarZoomed} onZoom={() => setRadarZoomed((value) => !value)}>全量指标雷达图</RadarTitle>
-                <p>最多展示 48 个指标，标签做截断，详细数值看下方热力矩阵。</p>
-                {fullRadarRows.length ? <MetricRadarD3 rows={fullRadarRows} full zoomed={radarZoomed} /> : <div className="aitext-empty">暂无全量指标数据</div>}
+                <RadarTitle zoomed={radarZoomed} onZoom={() => setRadarZoomed((value) => !value)}>评分项雷达图</RadarTitle>
+                <p>展示参与 AI 检测评分的全部基准指标，并按评分权重排序。</p>
+                {scoringRadarRows.length ? <MetricRadarD3 rows={scoringRadarRows} full zoomed={radarZoomed} hideScopePrefix /> : <div className="aitext-empty">暂无评分项数据，请先重建检测基准</div>}
               </section>
               <section className="aitext-panel full aitext-heatmap-panel">
                 <div className="aitext-panel-sticky-title">
-                  <h3>全部指标热力矩阵</h3>
-                  <p>每个指标一行，展示 AI 均值、人工均值、差异强度与偏向。</p>
+                  <h3>评分项热力矩阵</h3>
+                  <p>每个评分项一行，展示 AI 均值、人工均值、差异强度与偏向。</p>
                 </div>
-                <MetricHeatmapD3 rows={comparableMetricRows} />
+                <MetricHeatmapD3 rows={scoringRadarRows} />
               </section>
               <section className="aitext-panel wide">
                 <h3>指标偏向强度</h3>
@@ -2629,6 +3396,27 @@ export default function AiTextPage() {
         )}
       </main>
 
+      {clearConfirmOpen ? (
+        <div className="confirm-mask" role="dialog" aria-modal="true">
+          <section className="confirm-panel aitext-clear-confirm">
+            <h3>确认清空文本分析数据</h3>
+            <p>将保留任务列表，并清空作业、语料、指标、特征、词汇、句式、检测基准和可视化累计数据。任务会重置为待执行，此操作不可恢复。</p>
+            <label>
+              <span>输入“清空文本分析”确认</span>
+              <input value={clearConfirmText} onChange={(event) => setClearConfirmText(event.target.value)} autoFocus />
+            </label>
+            <div>
+              <button type="button" disabled={taskBusy} onClick={() => { setClearConfirmOpen(false); setClearConfirmText(""); }}>
+                取消
+              </button>
+              <button className="danger-button" type="button" disabled={taskBusy || clearConfirmText !== "清空文本分析"} onClick={() => void clearAllAiTextData()}>
+                确认清空
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {baselineConfirmOpen ? (
         <div className="confirm-mask" role="dialog" aria-modal="true">
           <section className="confirm-panel">
@@ -2651,7 +3439,7 @@ export default function AiTextPage() {
           <section className="crud-modal aitext-upload-modal">
             <header>
               <strong>批量文档采集</strong>
-              <button className="icon-button" onClick={() => setUploadOpen(false)}>
+              <button className="icon-button" disabled={uploadBusy} onClick={() => { setUploadOpen(false); setUploadDeduped(false); }}>
                 <X size={18} />
               </button>
             </header>
@@ -2669,24 +3457,26 @@ export default function AiTextPage() {
               </label>
               <label>
                 兜底字数
-                <input type="number" min={200} max={20000} value={uploadChars} onChange={(event) => setUploadChars(Number(event.target.value || 2000))} />
+                <input type="number" min={200} max={20000} value={uploadChars} onChange={(event) => { setUploadDeduped(false); setUploadChars(Number(event.target.value || 2000)); }} />
               </label>
               <div className="aitext-upload-field wide">
                 <span>选择文档</span>
                 <FileUploadField
                   accept=".txt,.md,.docx,.pdf"
+                  disabled={uploadBusy}
                   files={uploadFiles}
                   label="选择文档"
                   multiple
                   note="支持 TXT、Markdown、Word、PDF"
-                  onChange={setUploadFiles}
+                  onChange={(files) => { setUploadDeduped(false); setUploadFiles(files); }}
                 />
               </div>
             </div>
             <footer className="modal-actions aitext-modal-actions">
-              <button onClick={() => setUploadOpen(false)}>取消</button>
-              <button className="primary-button" disabled={!uploadFiles.length} onClick={() => void uploadTasks()}>
-                创建任务
+              <button disabled={uploadBusy} onClick={() => { setUploadOpen(false); setUploadDeduped(false); }}>取消</button>
+              <button className="primary-button" disabled={!uploadFiles.length || uploadBusy} onClick={() => void uploadTasks()}>
+                {uploadBusy ? <Loader2 className="spin" size={18} /> : null}
+                {uploadBusy ? (uploadDeduped ? "创建中" : "去重中") : (uploadDeduped ? "创建任务" : "去重")}
               </button>
             </footer>
           </section>
@@ -2710,7 +3500,6 @@ export default function AiTextPage() {
               </div>
               <div className="aitext-detect-header-actions">
                 {detectResult ? <button type="button" onClick={() => notify({ type: "info", title: "导出报告", message: "报告导出接口待接入" })}>导出报告</button> : null}
-                {detectResult ? <button type="button" onClick={() => { setDetectDetailOpen(false); setDetectOpen(false); setActiveTab("experiments"); }}>对比实验</button> : null}
                 {detectResult ? <button type="button" onClick={() => setDetectDetailOpen(true)}>详细报告</button> : null}
                 {detectResult ? <button className="primary-button" type="button" disabled={detectLoading} onClick={() => void runDetect()}>重新检测</button> : null}
                 <button className="icon-button" onClick={() => { setDetectDetailOpen(false); setDetectOpen(false); }}>
@@ -2726,32 +3515,17 @@ export default function AiTextPage() {
                       <strong>待测文本</strong>
                       <span>{detectPlatformChars.toLocaleString()} 字</span>
                     </div>
-                    <div className="aitext-detect-title-controls">
-                      <label className="detect-switch">
-                        <input type="checkbox" checked={detectUseAI} onChange={(event) => setDetectUseAI(event.target.checked)} />
-                        AI语义增强
-                      </label>
-                      <AppSelect value={detectModel} options={[{ value: "", label: "选择模型" }, ...detectModels]} onChange={setDetectModel} />
-                    </div>
                   </div>
                   <textarea value={detectText} onChange={(event) => setDetectText(event.target.value)} placeholder="请输入需要检测 AI 痕迹的文章" />
-                </section>
-                <aside className="aitext-detect-guide">
                   {detectLoading ? (
-                    <LoadingState text="检测中" width={60} height={16} />
-                  ) : (
-                    <>
-                      <strong>检测会输出什么？</strong>
-                      <div><b>综合分</b><span>按 AI 痕迹强度映射 0-100 分。</span></div>
-                      <div><b>文本块定位</b><span>按段落/块标出高、中、低风险。</span></div>
-                      <div><b>痕迹链</b><span>展示指标偏离、样本偏向、结构启发。</span></div>
-                      <div><b>复核建议</b><span>用于辅助人工判断，不作为唯一结论。</span></div>
-                    </>
-                  )}
-                </aside>
+                    <div className="aitext-detect-loading">
+                      <LoadingState text="检测中" width={80} height={18} />
+                    </div>
+                  ) : null}
+                </section>
               </div>
             ) : (
-              <DetectReport result={detectResult} detailOpen={detectDetailOpen} onCloseDetail={() => setDetectDetailOpen(false)} />
+              <DetectReport result={detectResult} detailOpen={detectDetailOpen} onCloseDetail={() => setDetectDetailOpen(false)} onClear={clearDetectReport} />
             )}
             {!detectResult ? (
               <footer className="modal-actions aitext-modal-actions">
@@ -2762,6 +3536,175 @@ export default function AiTextPage() {
                 </button>
               </footer>
             ) : null}
+          </section>
+        </div>
+      ) : null}
+
+      {taskErrorDetail ? (
+        <div className="confirm-mask">
+          <section className="crud-modal aitext-error-modal">
+            <header>
+              <strong>错误详情</strong>
+              <button className="icon-button" onClick={() => setTaskErrorDetail(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="aitext-error-detail">
+              <div className="aitext-error-meta">
+                <span>任务ID</span>
+                <strong>{formatText(taskErrorDetail.id || taskErrorDetail.taskId || "-")}</strong>
+                <span>文件</span>
+                <strong>{formatText(taskErrorDetail.fileName || taskErrorDetail.docName || "-")}</strong>
+                <span>状态</span>
+                <strong>{taskStatusName(taskErrorDetail.status)}</strong>
+              </div>
+              <pre>{formatText(taskErrorDetail.errorMessage)}</pre>
+            </div>
+            <footer className="modal-actions aitext-modal-actions">
+              <button onClick={() => setTaskErrorDetail(null)}>关闭</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {sensitiveAddOpen ? (
+        <div className="confirm-mask" role="dialog" aria-modal="true">
+          <section className="crud-modal aitext-sensitive-add-modal">
+            <header>
+              <strong>新增违规词</strong>
+              <button className="icon-button" disabled={sensitiveAddBusy} onClick={() => setSensitiveAddOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="aitext-sensitive-add-body">
+              <label>
+                违规词 <span>*</span>
+                <input
+                  value={sensitiveAddForm.word}
+                  onChange={(event) => setSensitiveAddForm((form) => ({ ...form, word: event.target.value }))}
+                  placeholder="请输入违规词"
+                  disabled={sensitiveAddBusy}
+                  autoFocus
+                />
+              </label>
+              <label>
+                建议替换
+                <input
+                  value={sensitiveAddForm.replacement}
+                  onChange={(event) => setSensitiveAddForm((form) => ({ ...form, replacement: event.target.value }))}
+                  placeholder="选填"
+                  disabled={sensitiveAddBusy}
+                />
+              </label>
+              <label>
+                备注
+                <textarea
+                  value={sensitiveAddForm.remark}
+                  onChange={(event) => setSensitiveAddForm((form) => ({ ...form, remark: event.target.value }))}
+                  placeholder="选填"
+                  disabled={sensitiveAddBusy}
+                />
+              </label>
+              <div className="aitext-sensitive-add-switch">
+                <span>启用</span>
+                <SwitchCell checked={sensitiveAddForm.enabled === 1} disabled={sensitiveAddBusy} onChange={(checked) => setSensitiveAddForm((form) => ({ ...form, enabled: checked ? 1 : 0 }))} />
+              </div>
+            </div>
+            <footer className="modal-actions aitext-modal-actions">
+              <button disabled={sensitiveAddBusy} onClick={() => setSensitiveAddOpen(false)}>取消</button>
+              <button className="primary-button" disabled={sensitiveAddBusy || !sensitiveAddForm.word.trim()} onClick={() => void saveSensitiveWord()}>
+                {sensitiveAddBusy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+                保存
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {sensitiveExtractOpen ? (
+        <div className="confirm-mask" role="dialog" aria-modal="true">
+          <section className="crud-modal aitext-sensitive-extract-modal">
+            <header>
+              <strong>AI提取违规词</strong>
+              <button className="icon-button" disabled={sensitiveExtractBusy} onClick={() => setSensitiveExtractOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="aitext-sensitive-extract-body">
+              <label className="aitext-sensitive-model-field">
+                模型
+                <AppSelect
+                  className="aitext-sensitive-model-select"
+                  triggerClassName="aitext-sensitive-model-trigger"
+                  menuClassName="aitext-sensitive-model-menu"
+                  value={sensitiveExtractModel}
+                  options={sensitiveExtractModelOptions}
+                  onChange={setSensitiveExtractModel}
+                  placeholder={sensitiveExtractModelLoading ? "加载模型中" : "请选择模型"}
+                  disabled={sensitiveExtractBusy || sensitiveExtractModelLoading || !sensitiveExtractModelOptions.length}
+                  maxMenuHeight={280}
+                />
+              </label>
+              <label className="aitext-sensitive-source-field">
+                <span className="aitext-sensitive-field-head">
+                  <span>审核清单</span>
+                </span>
+                <textarea
+                  className="aitext-sensitive-source-textarea"
+                  value={sensitiveExtractContent}
+                  onChange={(event) => setSensitiveExtractContent(event.target.value)}
+                  placeholder="粘贴番茄审核词、敏感词说明或词表。点击 AI 提取后会生成可编辑候选词。"
+                  disabled={sensitiveExtractBusy}
+                />
+              </label>
+              {sensitiveExtractResult ? (
+                <div className="aitext-sensitive-extract-result">
+                  <div>
+                    <span>提取</span>
+                    <strong>{formatText(sensitiveExtractResult.extractedCount)}</strong>
+                  </div>
+                  <div>
+                    <span>候选</span>
+                    <strong>{formatText(normalizeSensitiveCandidates(sensitiveExtractCandidates).length)}</strong>
+                  </div>
+                  <div>
+                    <span>已存在</span>
+                    <strong>{formatText(sensitiveExtractResult.existingCount)}</strong>
+                  </div>
+                </div>
+              ) : null}
+              <label className="aitext-sensitive-candidate-field">
+                候选违规词
+                <div className="aitext-sensitive-candidate-tags">
+                  {sensitiveExtractCandidates.length ? sensitiveExtractCandidates.map((word, index) => (
+                    <span className="aitext-sensitive-candidate-tag" key={`${word}-${index}`}>
+                      <input
+                        value={word}
+                        onChange={(event) => updateSensitiveCandidate(index, event.target.value)}
+                        disabled={sensitiveExtractBusy}
+                        aria-label={`候选违规词 ${index + 1}`}
+                      />
+                      <button type="button" disabled={sensitiveExtractBusy} onClick={() => removeSensitiveCandidate(index)} aria-label={`删除 ${word || "候选词"}`}>
+                        <X size={14} />
+                      </button>
+                    </span>
+                  )) : (
+                    <span className="aitext-sensitive-candidate-empty">AI 提取后会在这里回显候选词，可编辑，删除后不会保存。</span>
+                  )}
+                </div>
+              </label>
+            </div>
+            <footer className="modal-actions aitext-modal-actions">
+              <button disabled={sensitiveExtractBusy} onClick={() => setSensitiveExtractOpen(false)}>关闭</button>
+              <button
+                className="primary-button"
+                disabled={sensitiveExtractBusy || (sensitiveExtractCandidates.length ? !normalizeSensitiveCandidates(sensitiveExtractCandidates).length : (!sensitiveExtractContent.trim() || !sensitiveExtractModel))}
+                onClick={() => void (sensitiveExtractCandidates.length ? saveSensitiveExtractWords() : extractSensitiveWords())}
+              >
+                {sensitiveExtractBusy ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+                {sensitiveExtractCandidates.length ? "保存词条" : "AI提取"}
+              </button>
+            </footer>
           </section>
         </div>
       ) : null}
@@ -2783,9 +3726,9 @@ export default function AiTextPage() {
               { key: "sentenceCount", title: "句子", width: 80 },
               { key: "totalCostMs", title: "总耗时ms", width: 110 },
               { key: "retryCount", title: "重试", width: 70 },
-              { key: "startedAt", title: "开始时间", width: 210, render: (row) => formatTime(row.startedAt) },
-              { key: "completedAt", title: "完成时间", width: 210, render: (row) => formatTime(row.completedAt) },
-              { key: "errorMessage", title: "错误", width: 260 }
+              { key: "startedAt", title: "开始时间", width: 180, render: (row) => formatTime(row.startedAt) },
+              { key: "completedAt", title: "完成时间", width: 180, render: (row) => formatTime(row.completedAt) },
+              { key: "errorMessage", title: "错误", width: 120, render: (row) => row.errorMessage ? <button onClick={() => setTaskErrorDetail({ ...row, fileName: chunkTask.fileName })}>查看错误</button> : "-" }
             ]} rows={chunkState.rows} loading={chunkState.loading} page={chunkState.page} onPage={(page) => void reloadChunkLog(page)} minWidth={1200} />
           </section>
         </div>
@@ -2809,8 +3752,8 @@ export default function AiTextPage() {
               { key: "progress", title: "进度", width: 120, render: (row) => `${formatNumber(row.progress, 0)}%` },
               { key: "currentStep", title: "当前步骤", width: 180 },
               { key: "errorMessage", title: "错误", width: 220 },
-              { key: "createdAt", title: "创建时间", width: 210, render: (row) => formatTime(row.createdAt) },
-              { key: "updatedAt", title: "更新时间", width: 210, render: (row) => formatTime(row.updatedAt) }
+              { key: "createdAt", title: "创建时间", width: 180, render: (row) => formatTime(row.createdAt) },
+              { key: "updatedAt", title: "更新时间", width: 180, render: (row) => formatTime(row.updatedAt) }
             ]} rows={jobState.rows} loading={jobState.loading} page={jobState.page} onPage={(page) => void loadJobs(page)} minWidth={1450} />
           </section>
         </div>
@@ -2917,7 +3860,9 @@ function DatasetPane({
         onChange={(field, value) => setDatasetFilter(config.key, field, value)}
         onSearch={() => void loadDataset(config.key, config as { endpoint: string; search?: DatasetConfig["search"] }, true)}
         onReset={() => resetDatasetFilters(config.key, config.search, config as { endpoint: string; search?: DatasetConfig["search"] })}
-      />
+      >
+        {config.toolbarExtra}
+      </SearchBar>
       <DataTable
         columns={config.columns}
         rows={state.rows}

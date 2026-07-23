@@ -5,8 +5,14 @@ export type StoredUser = {
   nickname?: string;
   roleName?: string;
   token?: string;
-  menus?: Array<{ path?: string; children?: Array<{ path?: string }> }>;
-  cmsMenus?: Array<{ path?: string; children?: Array<{ path?: string }> }>;
+  menus?: PermissionNode[];
+  cmsMenus?: PermissionNode[];
+  [key: string]: unknown;
+};
+
+type PermissionNode = {
+  path?: unknown;
+  children?: unknown;
   [key: string]: unknown;
 };
 
@@ -46,42 +52,53 @@ export function isLoggedIn() {
   return Boolean(getStoredUser());
 }
 
-export function hasPathAccess(path: string) {
-  if (path === "/") return true;
-  const user = getStoredUser();
-  if (!user) return false;
-  if (String(user.roleName || "").toLowerCase().includes("admin")) return true;
-
-  const menus = [...(user.menus || []), ...(user.cmsMenus || [])];
-  if (!menus.length) return true;
-
-  const paths = menus.flatMap((menu) => {
-    if (menu.children?.length) {
-      return menu.children.map((child) => child.path).filter(Boolean);
-    }
-    return [menu.path].filter(Boolean);
-  });
-
-  return paths.includes(path);
+function normalizePath(path: unknown) {
+  if (typeof path !== "string") return "";
+  const cleanPath = path.trim().split("?")[0].split("#")[0];
+  if (!cleanPath) return "";
+  const withSlash = cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`;
+  return withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
 }
 
-export function isAdminUser(user: StoredUser | null = getStoredUser()) {
-  return String(user?.roleName || "").toLowerCase().includes("admin");
+function collectPermissionPaths(nodes: unknown, result: Set<string>) {
+  if (!Array.isArray(nodes)) return;
+
+  nodes.forEach((node) => {
+    if (!node || typeof node !== "object") return;
+    const item = node as PermissionNode;
+    const path = normalizePath(item.path);
+    if (path) result.add(path);
+    collectPermissionPaths(item.children, result);
+  });
+}
+
+export function getPermissionPaths(user: StoredUser | null = getStoredUser()) {
+  const paths = new Set<string>();
+  if (!user) return paths;
+
+  collectPermissionPaths(user.menus, paths);
+  collectPermissionPaths(user.cmsMenus, paths);
+  collectPermissionPaths(user.permissions, paths);
+  collectPermissionPaths(user.permissionList, paths);
+  collectPermissionPaths(user.permissionTree, paths);
+
+  return paths;
 }
 
 export function getAllowedPaths(user: StoredUser | null = getStoredUser()) {
-  if (!user) return new Set<string>();
-  if (isAdminUser(user)) return null;
+  return getPermissionPaths(user);
+}
 
-  const menus = [...(user.menus || []), ...(user.cmsMenus || [])];
-  if (!menus.length) return null;
+export function hasPathAccess(path: string, user: StoredUser | null = getStoredUser()) {
+  if (!user) return false;
 
-  const paths = menus.flatMap((menu) => {
-    if (menu.children?.length) {
-      return menu.children.map((child) => child.path).filter(Boolean);
-    }
-    return [menu.path].filter(Boolean);
+  const allowedPaths = getPermissionPaths(user);
+  const targetPath = normalizePath(path);
+  if (!targetPath) return false;
+  if (targetPath === "/") return allowedPaths.has("/");
+
+  return Array.from(allowedPaths).some((allowedPath) => {
+    if (allowedPath === "/") return targetPath === "/";
+    return targetPath === allowedPath || targetPath.startsWith(`${allowedPath}/`);
   });
-
-  return new Set(paths);
 }

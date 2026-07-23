@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 export type RoleTransferItem = {
   id: string | number;
   name: string;
+  level?: number | string;
   disabled?: boolean;
 };
 

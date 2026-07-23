@@ -114,16 +114,18 @@ const processStatusEnum: Record<string, EnumValue> = {
 
 const accountStatusOptions: FieldOption[] = [
   { label: "待审核", value: 1 },
-  { label: "通过", value: 2 },
-  { label: "驳回", value: 3 },
-  { label: "已邀请", value: 4 },
-  { label: "取消", value: 5 }
+  { label: "审核通过", value: 2 },
+  { label: "审核拒绝", value: 3 },
+  { label: "已发放账号", value: 4 },
+  { label: "已取消", value: 5 }
 ];
 
 const userTypeOptions: FieldOption[] = [
-  { label: "普通用户", value: 1 },
-  { label: "创作者", value: 2 },
-  { label: "管理员", value: 3 }
+  { label: "小说作者", value: 1 },
+  { label: "网文作者", value: 2 },
+  { label: "编剧", value: 3 },
+  { label: "内容运营", value: 4 },
+  { label: "其他", value: 99 }
 ];
 
 const promptTypeOptions: FieldOption[] = [
@@ -173,7 +175,7 @@ export const menuGroups: MenuGroup[] = [
         key: "daily-hot",
         label: "每日热点",
         icon: Flame,
-        path: "/",
+        path: "/report-manage",
         description: "生成、预览和管理每日小说热点日报。",
         api: { page: "/check/report/page", gen: "/check/report/gen", delete: "/check/report/delete" },
         searchPlaceholder: "搜索日报内容"
@@ -197,11 +199,10 @@ export const menuGroups: MenuGroup[] = [
           { key: "raw", title: "原内容" },
           { key: "content", title: "内容" },
           { key: "status", title: "状态", type: "enum", enumMap: normalStatusEnum },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
-        formFields: [{ key: "content", label: "内容", type: "textarea", rows: 18 }],
         searchFields: [{ key: "content", placeholder: "请输入内容" }],
-        api: { page: "/check/world/talk/page", add: "/check/data/original/data/add", update: "/check/report/update", delete: "/check/report/delete" }
+        api: { page: "/check/world/talk/page", delete: "/check/world/talk/delete" }
       }
     ]
   },
@@ -222,8 +223,8 @@ export const menuGroups: MenuGroup[] = [
           { key: "reason", title: "申请理由" },
           { key: "reviewRemark", title: "审核备注", width: 100},
           { key: "applyIp", title: "申请 IP" },
-          { key: "reviewTime", title: "审核时间", width: 220, type: "date" },
-          { key: "createTime", title: "创建时间", width: 220, type: "date" }
+          { key: "reviewTime", title: "审核时间", width: 180, type: "date" },
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "email", label: "邮箱" },
@@ -235,8 +236,8 @@ export const menuGroups: MenuGroup[] = [
         ],
         searchFields: [
           { key: "email", placeholder: "请输入邮箱" },
-          { key: "userType", placeholder: "用户类型", type: "select", options: userTypeOptions },
-          { key: "status", placeholder: "申请状态", type: "select", options: accountStatusOptions }
+          { key: "userType", placeholder: "全部用户类型", type: "select", options: userTypeOptions },
+          { key: "status", placeholder: "全部申请状态", type: "select", options: accountStatusOptions }
         ],
         api: { page: "/check/account/apply/page", add: "/check/account/apply/add", update: "/check/account/apply/update", delete: "/check/account/apply/delete" }
       }
@@ -299,7 +300,7 @@ export const menuGroups: MenuGroup[] = [
               active: checked ? 1 : 0
             })
           },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "type", label: "类型", type: "select", options: promptTypeOptions },
@@ -331,8 +332,8 @@ export const menuGroups: MenuGroup[] = [
           { key: "progress", title: "进度" },
           { key: "targetCharCount", title: "兜底字数" },
           { key: "totalChars", title: "字数" },
-          { key: "createTime", title: "创建时间", type: "date" },
-          { key: "updateTime", title: "更新时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" },
+          { key: "updateTime", title: "更新时间", width: 180, type: "date" }
         ],
         searchFields: [
           { key: "fileName", placeholder: "搜索文件名" },
@@ -340,7 +341,11 @@ export const menuGroups: MenuGroup[] = [
         ],
         actions: [
           { label: "一键执行", api: "/check/aitext/task/execute/all" },
+          { label: "停止执行", api: "/check/aitext/task/stop/all", confirm: "确认停止选中的执行任务？" },
           { label: "一键撤回", api: "/check/aitext/task/rollback/all", confirm: "确认撤回所有可撤回任务？" },
+          { label: "一键清空", api: "/check/aitext/task/clear-all", confirm: "确认清空文本分析结果数据？任务列表会保留并重置为待执行。" },
+          { label: "检测基准列表", api: "/check/aitext/baseline/page" },
+          { label: "设置检测基准用途", api: "/check/aitext/baseline/score-enabled" },
           { label: "重建检测基准", api: "/check/aitext/baseline/rebuild", confirm: "确认重建 AI 检测基准？" }
         ],
         imports: [{ label: "上传文档采集", api: "/check/aitext/task/create", accept: ".txt,.doc,.docx", fields: [{ key: "sourceType", label: "文本类型", type: "select", options: [{ label: "AI文", value: "ai" }, { label: "人工文", value: "human" }] }] }],
@@ -357,7 +362,7 @@ export const menuGroups: MenuGroup[] = [
           { key: "content", title: "内容" },
           { key: "result", title: "处理结果" },
           { key: "status", title: "状态", type: "enum", enumMap: processStatusEnum },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "novel", label: "小说名", required: false },
@@ -386,7 +391,7 @@ export const menuGroups: MenuGroup[] = [
           { key: "sourceTextName", title: "小说名" },
           { key: "sourceChunk", title: "原始段落" },
           { key: "status", title: "状态", type: "enum", enumMap: processStatusEnum },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "sourceTextName", label: "小说名", required: false },
@@ -445,7 +450,7 @@ export const menuGroups: MenuGroup[] = [
           { key: "permissionCode", title: "资源标识" },
           { key: "menuCode", title: "按钮标识" },
           { key: "name", title: "路由Name" },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "title", label: "菜单名称" },
@@ -469,13 +474,15 @@ export const menuGroups: MenuGroup[] = [
         columns: [
           { key: "name", title: "角色名称" },
           { key: "description", title: "描述" },
+          { key: "level", title: "级别" },
           { key: "status", title: "状态", type: "enum", enumMap: { "1": { label: "启用", color: "green" }, "2": "停用", true: "启用", false: "停用" } },
-          { key: "createTime", title: "创建时间", type: "date" },
-          { key: "updateTime", title: "更新时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" },
+          { key: "updateTime", title: "更新时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "name", label: "角色名称" },
           { key: "description", label: "描述", type: "textarea", rows: 3, required: false },
+          { key: "level", label: "级别", type: "number", required: false },
           { key: "status", label: "状态", type: "select", options: [{ label: "启用", value: 1 }, { label: "停用", value: 2 }], required: false }
         ],
         searchFields: [{ key: "name", placeholder: "搜索角色" }],
@@ -493,8 +500,8 @@ export const menuGroups: MenuGroup[] = [
           { key: "email", title: "邮箱" },
           { key: "phone", title: "手机号" },
           { key: "status", title: "状态", type: "enum", enumMap: { "1": { label: "正常", color: "green" }, "2": { label: "封禁", color: "red" }, true: "正常", false: "封禁" } },
-          { key: "createTime", title: "创建时间", type: "date" },
-          { key: "updateTime", title: "更新时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" },
+          { key: "updateTime", title: "更新时间", width: 180, type: "date" }
         ],
         formFields: [
           { key: "username", label: "账号" },
@@ -531,7 +538,7 @@ export const menuGroups: MenuGroup[] = [
           { key: "execption", title: "异常信息" },
           { key: "time", title: "响应时间" },
           { key: "ip", title: "IP地址" },
-          { key: "createTime", title: "创建时间", type: "date" }
+          { key: "createTime", title: "创建时间", width: 180, type: "date" }
         ],
         searchFields: [
           { key: "username", placeholder: "搜索用户名" },

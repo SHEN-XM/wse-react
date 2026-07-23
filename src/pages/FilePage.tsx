@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import AppSelect from "../components/AppSelect";
 import { postReq } from "../utils/request";
 import { notify } from "../utils/notify";
+import { formatAppDateTime } from "../utils/dateFormat";
 
 type FileRow = {
   id?: string | number;
@@ -64,11 +65,7 @@ function text(value: unknown) {
 }
 
 function formatDate(value: unknown) {
-  if (!value) return "-";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (num: number) => String(num).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return formatAppDateTime(value);
 }
 
 export default function FilePage() {

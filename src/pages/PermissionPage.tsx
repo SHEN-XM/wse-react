@@ -4,6 +4,8 @@ import AppSelect from "../components/AppSelect";
 import SegmentedControl from "../components/SegmentedControl";
 import { deleteReq, getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
+import { formatAppDateTime } from "../utils/dateFormat";
+import { confirmAction } from "../utils/confirm";
 
 type PermissionRow = {
   id: string | number;
@@ -130,11 +132,7 @@ function valueText(value: unknown) {
 }
 
 function formatDate(value: unknown) {
-  if (!value) return "-";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (num: number) => String(num).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatAppDateTime(value);
 }
 
 function matches(row: PermissionRow, keyword: string): boolean {
@@ -233,7 +231,8 @@ export default function PermissionPage() {
 
   const openAdd = (parent?: PermissionRow) => {
     setFormMode("add");
-    setForm({ ...emptyForm, pid: parent ? String(parent.id) : selectedId || "0", type: parent && Number(parent.type) >= 2 ? 3 : 1 });
+    const type = parent && Number(parent.type) >= 2 ? 3 : 1;
+    setForm({ ...emptyForm, pid: parent ? String(parent.id) : selectedId || "0", type, method: type === 3 ? "POST" : "" });
     setFormErrors({});
     setFormOpen(true);
   };
@@ -258,7 +257,13 @@ export default function PermissionPage() {
   };
 
   const updateForm = <K extends keyof PermissionForm>(key: K, value: PermissionForm[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === "type" && Number(value) === 3 && !next.method.trim()) {
+        next.method = "POST";
+      }
+      return next;
+    });
     if (formErrors[key]) {
       setFormErrors((prev) => {
         const next = { ...prev };
@@ -269,7 +274,13 @@ export default function PermissionPage() {
   };
 
   const removeRow = async (row: PermissionRow) => {
-    if (!window.confirm(`确定删除「${row.title || row.id}」吗？子权限也可能受到影响。`)) return;
+    const confirmed = await confirmAction({
+      title: "确认删除权限",
+      message: `将删除「${row.title || row.id}」，子权限也可能受到影响。`,
+      confirmText: "确认删除",
+      tone: "danger"
+    });
+    if (!confirmed) return;
     const resp = await deleteReq(`/check/permission/delete/${row.id}`);
     if (resp.code === 0 || resp.code === undefined) {
       notify({ type: "success", title: "删除成功", message: String(row.title || row.id) });

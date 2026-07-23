@@ -12,13 +12,12 @@ import {
 } from "../api/dailyReport";
 import AppSelect from "../components/AppSelect";
 import { notify } from "../utils/notify";
+import { formatAppDateTime } from "../utils/dateFormat";
 
 const DAILY_TYPE_HOT = 1;
 
 function formatDateTime(value?: string) {
-  if (!value) return "-";
-  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return value.replace("T", " ").slice(0, 19);
-  return value;
+  return formatAppDateTime(value);
 }
 
 function safeParseItems(content?: string): DailyItem[] {
@@ -242,10 +241,12 @@ export default function DailyHotPage() {
             <div className="daily-card-list">
               {previewItems.map((item, index) => (
                 <article className="daily-hot-card" key={`${item.title || "item"}-${index}`}>
-                  <div className="daily-card-index">{String(index + 1).padStart(2, "0")}</div>
                   <div className="daily-card-main">
                     <div className="daily-card-head">
-                      <h3>{item.title || "未命名热点"}</h3>
+                      <h3>
+                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        {item.title || "未命名热点"}
+                      </h3>
                       <div className="daily-card-tags">
                         {item.category && <span>{item.category}</span>}
                         {item.trend && <span>{item.trend}</span>}

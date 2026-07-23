@@ -1,13 +1,9 @@
 import { ChevronDown, ChevronLeft, LogOut, Menu, Moon, Search, SunMedium, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { menuGroups, menuLeaves, type MenuLeaf } from "../data/menu";
+import { menuGroups, menuLeaves } from "../data/menu";
 import { useTheme } from "../theme/ThemeProvider";
 import { clearAuth, getAllowedPaths, getStoredUser } from "../utils/authState";
-
-function findInitialMenu(): MenuLeaf {
-  return menuLeaves.find((item) => item.path === window.location.pathname) ?? menuLeaves.find((item) => item.key === "daily-hot") ?? menuLeaves[0];
-}
 
 export default function AdminShell() {
   const navigate = useNavigate();
@@ -17,22 +13,23 @@ export default function AdminShell() {
   const [query, setQuery] = useState("");
   const { theme, toggleTheme } = useTheme();
 
-  const activeItem = useMemo(
-    () => menuLeaves.find((item) => item.path === location.pathname) ?? findInitialMenu(),
-    [location.pathname]
-  );
   const user = getStoredUser();
   const displayName = user?.nickname || user?.realname || user?.username || "管理员";
+  const primaryRoleName = user?.roleName || "";
   const allowedPaths = useMemo(() => getAllowedPaths(user), [user]);
   const visibleMenuGroups = useMemo(() => {
-    if (allowedPaths === null) return menuGroups;
     return menuGroups
       .map((group) => ({
         ...group,
-        children: group.children.filter((item) => item.path === "/" || allowedPaths.has(item.path))
+        children: group.children.filter((item) => allowedPaths.has(item.path))
       }))
       .filter((group) => group.children.length > 0);
   }, [allowedPaths]);
+  const visibleMenuLeaves = useMemo(() => visibleMenuGroups.flatMap((group) => group.children), [visibleMenuGroups]);
+  const activeItem = useMemo(
+    () => visibleMenuLeaves.find((item) => item.path === location.pathname) ?? visibleMenuLeaves[0] ?? menuLeaves[0],
+    [location.pathname, visibleMenuLeaves]
+  );
 
   const filteredGroups = useMemo(() => {
     const keyword = query.trim();
@@ -161,6 +158,7 @@ export default function AdminShell() {
               <button className="user-chip" type="button">
                 <UserRound size={15} />
                 <span>{displayName}</span>
+                {primaryRoleName ? <em>{primaryRoleName}</em> : null}
               </button>
               <div className="user-menu">
                 <button type="button" onClick={logout}>

@@ -4,6 +4,7 @@ import AppSelect from "../components/AppSelect";
 import JsonViewer from "../components/JsonViewer";
 import { notify } from "../utils/notify";
 import { postReq } from "../utils/request";
+import { formatAppDateTime } from "../utils/dateFormat";
 
 type LogRow = {
   id?: string | number;
@@ -48,11 +49,7 @@ function valueText(value: unknown) {
 }
 
 function formatDate(value: unknown) {
-  if (!value) return "-";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (num: number) => String(num).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatAppDateTime(value);
 }
 
 function formatCost(value: unknown) {

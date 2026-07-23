@@ -2,15 +2,40 @@ import { Eye, EyeOff, Loader2, LockKeyhole, RefreshCw, ShieldCheck, UserRound } 
 import { FormEvent, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getCaptcha, login } from "../api/auth";
-import { persistUser } from "../utils/authState";
+import { menuLeaves } from "../data/menu";
+import { getAllowedPaths, persistUser, type StoredUser } from "../utils/authState";
 import { notify } from "../utils/notify";
+import { redirectToPublicHome } from "../utils/publicHome";
+
+function hasBackendRouteAccess(user: StoredUser) {
+  const allowedPaths = getAllowedPaths(user);
+  return menuLeaves.some((item) => allowedPaths.has(item.path));
+}
+
+function normalizeLoginRedirect(value: string) {
+  const base = String(import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+  let next = value.trim() || "/";
+  if (/^https?:\/\//i.test(next)) {
+    try {
+      const url = new URL(next);
+      next = `${url.pathname}${url.search}`;
+    } catch {
+      return "/";
+    }
+  }
+  if (base && next === base) next = "/";
+  else if (base && next.startsWith(`${base}/`)) next = next.slice(base.length) || "/";
+  if (!next.startsWith("/")) next = `/${next}`;
+  if (next === "/login" || next.startsWith("/login?")) return "/";
+  return next;
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const redirect = useMemo(() => {
     const state = location.state as { from?: string } | null;
-    return state?.from || new URLSearchParams(location.search).get("redirect") || "/";
+    return normalizeLoginRedirect(state?.from || new URLSearchParams(location.search).get("redirect") || "/");
   }, [location.search, location.state]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -76,6 +101,10 @@ export default function LoginPage() {
     try {
       const resp = await login({ username: username.trim(), password, captcha: captcha.trim() });
       if (resp.code === 0 && resp.data) {
+        if (!hasBackendRouteAccess(resp.data)) {
+          redirectToPublicHome();
+          return;
+        }
         persistUser(resp.data);
         notify({ type: "success", title: "登录成功", message: resp.data.nickname || resp.data.realname || resp.data.username });
         navigate(redirect, { replace: true });
