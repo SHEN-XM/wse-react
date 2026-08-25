@@ -1,4 +1,3 @@
-import { getToken } from "../utils/authState";
 import { postReq, type ApiResponse } from "../utils/request";
 
 export type LosslessCutMode = "keyframe-copy" | "precise-reencode" | "hybrid";
@@ -89,10 +88,6 @@ export function hasVideoProcessor() {
   return true;
 }
 
-export function getProcessorHint() {
-  return "后端：wse-check /check/video";
-}
-
 export async function detectDuplicateSegments(request: DetectRequest, signal?: AbortSignal) {
   if (!request.file) {
     throw new Error("请重新选择视频文件后再检测");
@@ -122,28 +117,16 @@ export async function cancelVideoTask(taskId?: string) {
   await postReq("/check/video/task/cancel", { taskId }).catch(() => undefined);
 }
 
-export async function downloadVideoOutput(taskId?: string, filename = "video_clean.mp4") {
-  if (!taskId) return;
-  const baseURL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-  const response = await fetch(`${baseURL}/check/video/download`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Requested-With": "XMLHttpRequest",
-      authorization: getToken(),
-      Authorization: getToken()
-    },
-    body: JSON.stringify({ taskId })
-  });
-  if (!response.ok) {
-    throw new Error(`下载失败：${response.status}`);
+export function downloadVideoOutput(taskId?: string, filename = "video_clean.mp4") {
+  if (!taskId) {
+    throw new Error("导出任务不存在，请重新检测");
   }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
+  const baseURL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
   const link = document.createElement("a");
-  link.href = url;
+  link.href = `${baseURL}/check/video/download?taskId=${encodeURIComponent(taskId)}`;
   link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
 }

@@ -20,8 +20,6 @@ import {
   detectDuplicateSegments,
   downloadVideoOutput,
   exportCleanVideo,
-  getProcessorHint,
-  hasVideoProcessor,
   type CropRect,
   type DetectParams,
   type DuplicateSegment,
@@ -184,7 +182,6 @@ export default function LosslessVideoPage() {
   const [cropRect, setCropRect] = useState<CropRect | undefined>();
   const [taskId, setTaskId] = useState<string>();
   const [error, setError] = useState("");
-  const [outputPath, setOutputPath] = useState("");
   const [dragging, setDragging] = useState(false);
   const [stepStartedAt, setStepStartedAt] = useState(0);
   const [stepFinishedAt, setStepFinishedAt] = useState(0);
@@ -256,7 +253,6 @@ export default function LosslessVideoPage() {
     setCropRect(undefined);
     setTaskId(undefined);
     setError("");
-    setOutputPath("");
     setProgress({ percent: 0, label: "等待检测", detail: "参数确认后开始扫描重复片段" });
     setStatus("idle");
   };
@@ -286,7 +282,6 @@ export default function LosslessVideoPage() {
     }
     setStatus("detecting");
     setError("");
-    setOutputPath("");
     setProgress({ percent: 8, label: "检测中", detail: "连接本地处理器，准备音频指纹初筛" });
     abortRef.current = new AbortController();
     try {
@@ -330,23 +325,23 @@ export default function LosslessVideoPage() {
     }
     abortRef.current = new AbortController();
     try {
+      const outputName = videoInput.name.replace(/\.[^.]+$/, "_clean.mp4");
       const response = await exportCleanVideo(
         {
           taskId,
           input: videoInput,
           segments,
           mode,
-          outputName: videoInput.name.replace(/\.[^.]+$/, "_clean.mp4"),
+          outputName,
           autoCropBlackBars: params.autoCropBlackBars,
           cropRect
         },
         abortRef.current.signal
       );
-      const path = response.outputPath || response.downloadUrl || "";
-      setOutputPath(path);
+      downloadVideoOutput(response.taskId || taskId, outputName);
       setStatus("done");
-      setProgress({ percent: 100, label: "导出完成", detail: response.message || path || "已输出无重复 MP4" });
-      notify({ type: "success", title: "导出完成", message: path || response.message });
+      setProgress({ percent: 100, label: "导出完成", detail: `${response.message || "已输出无重复 MP4"}，文件已开始保存：${outputName}` });
+      notify({ type: "success", title: "导出完成", message: `${outputName} 已开始保存` });
     } catch (err) {
       const message = err instanceof Error ? err.message : "导出失败";
       setStatus(abortRef.current?.signal.aborted ? "cancelled" : "error");
@@ -401,7 +396,6 @@ export default function LosslessVideoPage() {
             <RotateCcw size={16} />
             重置结果
           </button>
-          <span className={`processor-chip ${hasVideoProcessor() ? "ready" : "missing"}`}>{getProcessorHint()}</span>
         </div>
 
         <div className="lossless-video-body">
@@ -549,12 +543,6 @@ export default function LosslessVideoPage() {
                 <span>黑边：{cropRect ? `${cropRect.w}x${cropRect.h}` : params.autoCropBlackBars ? "待检测" : "关闭"}</span>
               </div>
               {error ? <div className="lossless-error">{error}</div> : null}
-              {outputPath ? (
-                <button type="button" className="lossless-output" onClick={() => void downloadVideoOutput(taskId, videoInput?.name.replace(/\.[^.]+$/, "_clean.mp4"))}>
-                  <Download size={16} />
-                  {outputPath}
-                </button>
-              ) : null}
             </section>
 
             <section className="lossless-segments">

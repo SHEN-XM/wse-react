@@ -5272,32 +5272,24 @@ input {
   padding: 8px 10px;
 }
 
-.lossless-output {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 0 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .lossless-segments {
   min-height: 0;
   overflow: auto;
 }
 
 .lossless-segment-row {
-  min-width: 1280px;
+  min-width: 1330px;
   min-height: 46px;
   display: grid;
-  grid-template-columns: 128px 170px 170px 190px 92px 190px 104px 126px;
+  grid-template-columns: 128px 170px 170px 240px 92px 190px 104px 126px;
   align-items: center;
   gap: 10px;
   padding: 0 12px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.lossless-segment-row > :nth-child(4) {
+  white-space: nowrap;
 }
 
 .lossless-segment-head {
