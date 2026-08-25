@@ -25,7 +25,14 @@ const typeOptions = [
   { label: "单词", value: 2 }
 ];
 
-const colors = ["#ce0b00", "#7b00bb", "#0055b4", "#006d1b", "#c27200"];
+const colorStops = [
+  { offset: 0, color: "#ff2f5f" },
+  { offset: 0.18, color: "#ff7a1a" },
+  { offset: 0.36, color: "#d39c00" },
+  { offset: 0.56, color: "#12b981" },
+  { offset: 0.76, color: "#0ea5e9" },
+  { offset: 1, color: "#7c3aed" }
+];
 
 function normalizeWord(item: RawHotWord): HotWord | null {
   const label = item.key || item.name || item.word || item.title || "";
@@ -36,8 +43,36 @@ function normalizeWord(item: RawHotWord): HotWord | null {
   };
 }
 
+function hexToRgb(hex: string) {
+  const normalized = hex.replace("#", "");
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex(r: number, g: number, b: number) {
+  return `#${[r, g, b].map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function mixColor(from: string, to: string, ratio: number) {
+  const start = hexToRgb(from);
+  const end = hexToRgb(to);
+  return rgbToHex(
+    start.r + (end.r - start.r) * ratio,
+    start.g + (end.g - start.g) * ratio,
+    start.b + (end.b - start.b) * ratio
+  );
+}
+
 function colorAt(index: number, total: number) {
-  return colors[Math.min(colors.length - 1, Math.floor((index / Math.max(1, total - 1)) * colors.length))];
+  const position = index / Math.max(1, total - 1);
+  const nextStopIndex = colorStops.findIndex((stop) => position <= stop.offset);
+  const nextStop = colorStops[Math.max(0, nextStopIndex)];
+  const prevStop = colorStops[Math.max(0, nextStopIndex - 1)];
+  const span = Math.max(0.001, nextStop.offset - prevStop.offset);
+  return mixColor(prevStop.color, nextStop.color, (position - prevStop.offset) / span);
 }
 
 function fontSizeAt(index: number, total: number) {
@@ -48,7 +83,7 @@ function fontSizeAt(index: number, total: number) {
 
 export default function HotWordsPage() {
   const [topN, setTopN] = useState(200);
-  const [type, setType] = useState(2);
+  const [type, setType] = useState(1);
   const [words, setWords] = useState<HotWord[]>([]);
   const [loading, setLoading] = useState(false);
   const cloudRef = useRef<HTMLDivElement | null>(null);

@@ -1,8 +1,10 @@
 import {
   Bot,
   CalendarDays,
+  Clapperboard,
   Database,
   FileText,
+  FileVideo,
   Flame,
   Grid3X3,
   KeyRound,
@@ -14,7 +16,9 @@ import {
   Network,
   ShieldCheck,
   Sparkles,
+  Scissors,
   SquareLibrary,
+  TrendingUp,
   User,
   UsersRound,
   Waypoints
@@ -179,6 +183,52 @@ export const menuGroups: MenuGroup[] = [
         description: "生成、预览和管理每日小说热点日报。",
         api: { page: "/check/report/page", gen: "/check/report/gen", delete: "/check/report/delete" },
         searchPlaceholder: "搜索日报内容"
+      }
+    ]
+  },
+  {
+    key: "drama-hot",
+    label: "漫剧热度",
+    icon: Clapperboard,
+    children: [
+      {
+        key: "drama-hot-subject",
+        label: "主体管理",
+        icon: SquareLibrary,
+        path: "/drama-hot/subject",
+        description: "管理漫剧主体、封面和基础信息。",
+        hideOverview: true
+      },
+      {
+        key: "drama-hot-new",
+        label: "新剧榜",
+        icon: TrendingUp,
+        path: "/drama-hot/new",
+        description: "手动维护每日前 99 名更新中、已完结漫剧。",
+        hideOverview: true
+      },
+      {
+        key: "drama-hot-reserve",
+        label: "预约榜",
+        icon: CalendarDays,
+        path: "/drama-hot/reserve",
+        description: "按日期查看和维护预约中的漫剧季，按预约数排序。",
+        hideOverview: true
+      }
+    ]
+  },
+  {
+    key: "video-tools",
+    label: "视频工具",
+    icon: FileVideo,
+    children: [
+      {
+        key: "lossless-video",
+        label: "无损处理",
+        icon: Scissors,
+        path: "/lossless-video",
+        description: "检测长视频中相邻重复片段，默认删除第二次出现并导出 MP4。",
+        hideOverview: true
       }
     ]
   },

@@ -5,10 +5,13 @@ import ApplyAccountPage from "../pages/ApplyAccountPage";
 import DataCollectionPage from "../pages/DataCollectionPage";
 import DailyHotPage from "../pages/DailyHotPage";
 import DictionaryPage from "../pages/DictionaryPage";
+import DramaHotPage from "../pages/DramaHotPage";
+import DramaSubjectPage from "../pages/DramaSubjectPage";
 import FilePage from "../pages/FilePage";
 import ForbiddenPage from "../pages/ForbiddenPage";
 import AiTextPage from "../pages/AiTextPage";
 import HotWordsPage from "../pages/HotWordsPage";
+import LosslessVideoPage from "../pages/LosslessVideoPage";
 import LogPage from "../pages/LogPage";
 import LoginPage from "../pages/LoginPage";
 import ModulePage from "../pages/ModulePage";
@@ -43,6 +46,12 @@ export const router = createBrowserRouter([
             element:
               item.key === "daily-hot" ? (
                 <DailyHotPage />
+              ) : item.key === "drama-hot-subject" ? (
+                <DramaSubjectPage />
+              ) : item.key === "drama-hot-new" ? (
+                <DramaHotPage fixedListType={1} />
+              ) : item.key === "drama-hot-reserve" ? (
+                <DramaHotPage fixedListType={2} />
               ) : item.key === "account-apply" ? (
                 <ApplyAccountPage />
               ) : item.key === "hot-words" ? (
@@ -63,6 +72,8 @@ export const router = createBrowserRouter([
                 <LogPage />
               ) : item.key === "files" ? (
                 <FilePage />
+              ) : item.key === "lossless-video" ? (
+                <LosslessVideoPage />
               ) : (
                 <ModulePage menuKey={item.key} />
               )

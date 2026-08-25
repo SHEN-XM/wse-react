@@ -4,7 +4,6 @@ import AppSelect from "../components/AppSelect";
 import SegmentedControl from "../components/SegmentedControl";
 import { deleteReq, getReq, postReq } from "../utils/request";
 import { notify } from "../utils/notify";
-import { formatAppDateTime } from "../utils/dateFormat";
 import { confirmAction } from "../utils/confirm";
 
 type PermissionRow = {
@@ -20,7 +19,6 @@ type PermissionRow = {
   permissionCode?: string;
   menuCode?: string;
   orderNum?: number | string;
-  createTime?: string;
   children?: PermissionRow[];
 };
 
@@ -131,10 +129,6 @@ function valueText(value: unknown) {
   return String(value);
 }
 
-function formatDate(value: unknown) {
-  return formatAppDateTime(value);
-}
-
 function matches(row: PermissionRow, keyword: string): boolean {
   if (!keyword) return true;
   const lower = keyword.toLowerCase();
@@ -146,12 +140,32 @@ function matches(row: PermissionRow, keyword: string): boolean {
 function PermissionTag({ kind, value }: { kind: "type" | "method" | "code" | "name"; value?: unknown }) {
   const text = kind === "type" ? typeText[String(value ?? "")] || "-" : valueText(value);
   if (text === "-") return <span className="muted-text">-</span>;
-  const className = `permission-tag permission-tag-${kind} ${kind === "method" ? `permission-method-${String(value).toLowerCase()}` : ""}`;
+  const typeClass = kind === "type" ? `permission-type-${String(value)}` : "";
+  const methodClass = kind === "method" ? `permission-method-${String(value).toLowerCase()}` : "";
+  const className = `permission-tag permission-tag-${kind} ${typeClass} ${methodClass}`;
   return <span className={className}>{text}</span>;
 }
 
 function collectIds(rows: PermissionRow[]) {
   return new Set(flattenInput(rows).map((item) => String(item.id)));
+}
+
+function findRowById(rows: PermissionRow[], id: string): PermissionRow | null {
+  if (!id) return null;
+  for (const row of rows) {
+    if (String(row.id) === id) return row;
+    const child = findRowById(row.children || [], id);
+    if (child) return child;
+  }
+  return null;
+}
+
+function defaultChildType(parent?: PermissionRow | null) {
+  if (!parent) return 1;
+  const parentType = Number(parent.type || 1);
+  if (parentType === 1) return 2;
+  if (parentType === 2) return 3;
+  return 3;
 }
 
 function IconPreview({ icon }: { icon?: string }) {
@@ -193,6 +207,7 @@ export default function PermissionPage() {
   const visibleRows = useMemo(() => flattenTree(filteredTree, visibleExpanded), [filteredTree, visibleExpanded]);
   const parentOptions = useMemo(() => flattenOptions(treeRows).filter((item) => Number(item.type) !== 3), [treeRows]);
   const menuCount = useMemo(() => flattenOptions(treeRows).length, [treeRows]);
+  const selectedRow = useMemo(() => findRowById(treeRows, selectedId), [selectedId, treeRows]);
 
   useEffect(() => {
     if (document.querySelector(`script[src="${iconfontScript}"]`)) return;
@@ -230,11 +245,20 @@ export default function PermissionPage() {
   };
 
   const openAdd = (parent?: PermissionRow) => {
+    const targetParent = parent || selectedRow;
     setFormMode("add");
-    const type = parent && Number(parent.type) >= 2 ? 3 : 1;
-    setForm({ ...emptyForm, pid: parent ? String(parent.id) : selectedId || "0", type, method: type === 3 ? "POST" : "" });
+    const type = defaultChildType(targetParent);
+    setForm({ ...emptyForm, pid: targetParent ? String(targetParent.id) : "0", type, method: type === 3 ? "POST" : "" });
     setFormErrors({});
     setFormOpen(true);
+  };
+
+  const selectRow = (row: PermissionRow, hasChildren: boolean) => {
+    const id = String(row.id);
+    setSelectedId(id);
+    if (hasChildren) {
+      toggleExpanded(row);
+    }
   };
 
   const openEdit = (row: PermissionRow) => {
@@ -365,7 +389,6 @@ export default function PermissionPage() {
             <span>按钮标识</span>
             <span>路由名称</span>
             <span>排序</span>
-            <span>创建时间</span>
             <span>操作</span>
           </div>
           {loading ? (
@@ -378,7 +401,7 @@ export default function PermissionPage() {
               const id = String(row.id);
               const hasChildren = Boolean(row.children?.length);
               return (
-                <div className={`permission-row ${selectedId === id ? "selected" : ""}`} key={id} onClick={() => setSelectedId(id)}>
+                <div className={`permission-row ${selectedId === id ? "selected" : ""}`} key={id} onClick={() => selectRow(row, hasChildren)}>
                   <span className="permission-name" style={{ paddingLeft: 10 + row.level * 24 }}>
                     {hasChildren ? (
                       <button className="permission-expand" type="button" onClick={(event) => { event.stopPropagation(); toggleExpanded(row); }}>
@@ -397,7 +420,6 @@ export default function PermissionPage() {
                   <span><PermissionTag kind="code" value={row.menuCode} /></span>
                   <span><PermissionTag kind="name" value={row.name} /></span>
                   <span>{valueText(row.orderNum)}</span>
-                  <span>{formatDate(row.createTime)}</span>
                   <span className="table-actions" onClick={(event) => event.stopPropagation()}>
                     {Number(row.type) !== 3 ? (
                       <button type="button" onClick={() => openAdd(row)}>
