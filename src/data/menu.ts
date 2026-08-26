@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Sparkles,
   Scissors,
+  Crop,
   SquareLibrary,
   TrendingUp,
   User,
@@ -80,6 +81,7 @@ export type MenuLeaf = {
   icon: ComponentType<LucideProps>;
   description: string;
   path: string;
+  permissionPath?: string;
   columns?: TableColumn[];
   formFields?: FormField[];
   searchFields?: SearchField[];
@@ -228,6 +230,15 @@ export const menuGroups: MenuGroup[] = [
         icon: Scissors,
         path: "/lossless-video",
         description: "检测长视频中相邻重复片段，默认删除第二次出现并导出 MP4。",
+        hideOverview: true
+      },
+      {
+        key: "cover-maker",
+        label: "封面制作",
+        icon: Crop,
+        path: "/cover-maker",
+        permissionPath: "/lossless-video",
+        description: "按主流视频平台比例裁剪并导出横版、竖版或方形封面。",
         hideOverview: true
       }
     ]

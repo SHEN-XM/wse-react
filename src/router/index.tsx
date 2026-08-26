@@ -19,6 +19,7 @@ import PermissionPage from "../pages/PermissionPage";
 import RequireAuth from "./RequireAuth";
 import RolePage from "../pages/RolePage";
 import UserPage from "../pages/UserPage";
+import CoverMakerPage from "../pages/CoverMakerPage";
 
 const routerBase = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -74,6 +75,8 @@ export const router = createBrowserRouter([
                 <FilePage />
               ) : item.key === "lossless-video" ? (
                 <LosslessVideoPage />
+              ) : item.key === "cover-maker" ? (
+                <CoverMakerPage />
               ) : (
                 <ModulePage menuKey={item.key} />
               )

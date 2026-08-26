@@ -1,15 +1,14 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { menuLeaves } from "../data/menu";
-import { getAllowedPaths, getStoredUser, hasPathAccess, isLoggedIn } from "../utils/authState";
+import { getStoredUser, hasPathAccess, isLoggedIn } from "../utils/authState";
 import { redirectToPublicHome } from "../utils/publicHome";
 
 function getFirstAllowedRoute() {
   const user = getStoredUser();
   if (!user) return "";
 
-  const allowedPaths = getAllowedPaths(user);
-  return menuLeaves.find((item) => allowedPaths.has(item.path))?.path || "";
+  return menuLeaves.find((item) => hasPathAccess(item.permissionPath || item.path, user))?.path || "";
 }
 
 function PublicHomeRedirect() {
@@ -37,7 +36,9 @@ export default function RequireAuth() {
     return <Navigate to={firstAllowedRoute} replace />;
   }
 
-  if (!hasPathAccess(location.pathname, user)) {
+  const routeItem = menuLeaves.find((item) => item.path === location.pathname);
+  const permissionPath = routeItem?.permissionPath || location.pathname;
+  if (!hasPathAccess(permissionPath, user)) {
     return <Navigate to={firstAllowedRoute} replace />;
   }
 

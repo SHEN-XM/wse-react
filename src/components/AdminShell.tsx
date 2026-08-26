@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { menuGroups, menuLeaves } from "../data/menu";
 import { useTheme } from "../theme/ThemeProvider";
-import { clearAuth, getAllowedPaths, getStoredUser } from "../utils/authState";
+import { clearAuth, getStoredUser, hasPathAccess } from "../utils/authState";
 
 export default function AdminShell() {
   const navigate = useNavigate();
@@ -16,15 +16,14 @@ export default function AdminShell() {
   const user = getStoredUser();
   const displayName = user?.nickname || user?.realname || user?.username || "管理员";
   const primaryRoleName = user?.roleName || "";
-  const allowedPaths = useMemo(() => getAllowedPaths(user), [user]);
   const visibleMenuGroups = useMemo(() => {
     return menuGroups
       .map((group) => ({
         ...group,
-        children: group.children.filter((item) => allowedPaths.has(item.path))
+        children: group.children.filter((item) => hasPathAccess(item.permissionPath || item.path, user))
       }))
       .filter((group) => group.children.length > 0);
-  }, [allowedPaths]);
+  }, [user]);
   const visibleMenuLeaves = useMemo(() => visibleMenuGroups.flatMap((group) => group.children), [visibleMenuGroups]);
   const activeItem = useMemo(
     () => visibleMenuLeaves.find((item) => item.path === location.pathname) ?? visibleMenuLeaves[0] ?? menuLeaves[0],
