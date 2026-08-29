@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   --color-special: rgba(0, 0, 0, 0.06);
-  --color-green: rgb(18, 185, 129);;
+  --color-green: rgb(18, 185, 129);
   --color-danger: #fe2c55;
   --color-primary: #0045cc;
   --color-warning: #c47400;
@@ -33,7 +33,7 @@
 [data-theme="dark"] {
   color-scheme: dark;
   --color-special: rgba(255, 255, 255, 0.06);
-  --color-green: #00ff89;
+  --color-green: rgb(18, 185, 129);
   --color-danger: #ff2d79;
   --color-primary: #58e0ff;
   --color-warning: #ffc107;
@@ -638,16 +638,10 @@ input {
   border: 0;
   background: transparent;
   color: var(--text-color);
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 6px;
   padding: 0 8px;
   text-align: left;
-}
-
-.app-select-menu button svg {
-  opacity: 0;
 }
 
 .app-select-menu button span {
@@ -666,10 +660,6 @@ input {
 .app-select-menu button.selected {
   background: #111111;
   color: #ffffff;
-}
-
-.app-select-menu button.selected svg {
-  opacity: 1;
 }
 
 [data-theme="dark"] .app-select-menu button.selected {
@@ -1119,7 +1109,7 @@ input {
 
 [data-theme="dark"] .segmented-control button.is-active {
   color: #000000;
-  background: var(--color-primary);
+  background: var(--text-color);
 }
 
 .text-danger {
@@ -4987,366 +4977,1835 @@ input {
   justify-content: center;
 }
 
+/* Video editor workspace */
+.lossless-video-page {
+  padding: 12px 14px 16px;
+}
+
 .lossless-video-panel {
-  flex: 1;
+  background: var(--bg-color-light);
 }
 
 .lossless-video-toolbar {
+  min-height: 50px;
+  padding: 7px 0 7px 10px;
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) auto 380px;
   align-items: center;
+  gap: 12px;
+  background: var(--card-bg);
 }
 
-.processor-chip {
+.lossless-toolbar-group,
+.lossless-transport-buttons {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lossless-toolbar-separator {
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: var(--border-color);
+}
+
+.lossless-video-toolbar .lossless-icon-button {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.lossless-header-menu {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.lossless-header-menu button {
+  min-width: 76px;
+  height: 34px;
   min-height: 34px;
-  margin-left: auto;
   border: 1px solid var(--border-color);
-  background: var(--bg-color-light);
-  color: var(--text-color-secend);
+  border-radius: var(--border-radius);
+  background: var(--card-bg);
+  color: var(--text-color);
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
-  padding: 0 10px;
-  max-width: min(560px, 100%);
+  justify-content: center;
+  gap: 6px;
+}
+
+.lossless-header-menu button:hover {
+  background: color-mix(in srgb, var(--menu-hover) 70%, var(--card-bg));
+  color: var(--text-color);
+}
+
+.lossless-header-menu button.is-active {
+  color: var(--text-color);
+  border-color: color-mix(in srgb, var(--text-color) 42%, var(--border-color));
+  background: var(--menu-active);
+  box-shadow: none;
+}
+
+.lossless-file-chip {
+  min-width: 0;
+  width: 100%;
+  height: 34px;
+  justify-self: end;
+  border-left: 1px solid var(--border-color);
+  color: var(--text-color-secend);
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px 0 12px;
+  box-sizing: border-box;
+}
+
+.lossless-file-chip strong {
+  min-width: 0;
+  color: var(--text-color);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.processor-chip.ready {
-  color: var(--color-green);
-  border-color: color-mix(in srgb, var(--color-green) 48%, var(--border-color));
+.lossless-file-chip span {
+  white-space: nowrap;
 }
 
-.processor-chip.missing {
-  color: var(--color-warning);
-  border-color: color-mix(in srgb, var(--color-warning) 48%, var(--border-color));
+.lossless-file-input {
+  display: none;
 }
 
 .lossless-video-body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(320px, 390px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
 
-.lossless-video-left {
-  min-width: 0;
-  min-height: 0;
-  border-right: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-}
-
-.lossless-video-main {
+.lossless-editing-layout {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-columns: minmax(520px, 1fr) 380px;
   overflow: hidden;
 }
 
-.lossless-drop {
-  margin: 12px;
-  min-height: 132px;
-  border: 1px dashed var(--border-color);
-  background: var(--bg-color-light);
+.lossless-editor {
+  min-width: 0;
+  min-height: 0;
   display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 8px;
-  padding: 16px;
-  text-align: center;
-}
-
-.lossless-drop input {
-  display: none;
-}
-
-.lossless-drop.is-dragging,
-.lossless-drop:hover {
-  border-color: var(--text-color);
-  background: var(--card-bg);
-}
-
-.lossless-drop strong,
-.lossless-drop small {
-  max-width: 100%;
+  grid-template-rows: minmax(220px, 1fr) auto 210px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lossless-drop small,
-.lossless-boundary span,
-.lossless-settings label em,
-.lossless-status span,
-.lossless-summary,
-.lossless-error {
-  color: var(--text-color-secend);
-}
-
-.lossless-preview {
-  margin: 0 12px 12px;
-  min-height: 220px;
-  border: 1px solid var(--border-color);
-  background: #000000;
-  display: grid;
-  place-items: center;
-}
-
-.lossless-preview video {
-  width: 100%;
-  max-height: 280px;
-  display: block;
-  background: #000000;
-}
-
-.lossless-preview-empty {
-  color: #ffffff;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.lossless-boundary {
-  margin: 0 12px 12px;
-  display: grid;
-  gap: 8px;
-}
-
-.lossless-boundary div {
-  border: 1px solid var(--border-color);
   background: var(--card-bg);
+}
+
+.lossless-viewer {
+  min-width: 0;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: 4px 8px;
-  padding: 10px;
+  grid-template-rows: 30px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--card-bg);
 }
 
-.lossless-boundary div svg {
-  grid-row: 1 / span 2;
+.lossless-viewer.is-dragging {
+  box-shadow: inset 0 0 0 2px var(--color-primary);
 }
 
-.lossless-boundary span {
-  line-height: 1.45;
-}
-
-.lossless-settings {
+.lossless-viewer-titlebar {
+  min-width: 0;
   border-bottom: 1px solid var(--border-color);
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-}
-
-.lossless-settings .panel-title {
+  color: var(--text-color-secend);
+  background: var(--bg-color-light);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 0 10px;
+  font-size: 15px;
 }
 
-.lossless-settings .panel-title div {
+.lossless-preview {
+  position: relative;
   min-width: 0;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  background: #000000;
   display: grid;
-  gap: 3px;
+  place-items: center;
+  overflow: hidden;
 }
 
-.lossless-settings-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+.lossless-preview video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+  background: #000000;
+  cursor: pointer;
 }
 
-.lossless-settings-grid label {
-  min-width: 0;
-  min-height: 38px;
-  border: 1px solid var(--border-color);
+.lossless-media-overlay {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lossless-image-motion-path {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.lossless-image-motion-path polyline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-primary) 82%, #ffffff);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 6 5;
+  filter: drop-shadow(0 0 1px var(--bg-color));
+}
+
+.lossless-image-motion-path .lossless-image-motion-hitarea {
+  stroke: transparent;
+  stroke-width: 18;
+  stroke-dasharray: none;
+  filter: none;
+  pointer-events: stroke;
+  cursor: copy;
+}
+
+.lossless-image-motion-point {
+  position: absolute;
+  z-index: 4;
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  color: color-mix(in srgb, var(--color-primary) 82%, #ffffff);
+  background: transparent;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 0 1px var(--bg-color));
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.lossless-image-motion-point:hover:not(:disabled),
+.lossless-image-motion-point:focus-visible,
+.lossless-image-motion-point.is-selected {
+  color: var(--color-warning);
+  background: transparent;
+}
+
+.lossless-image-motion-point:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.lossless-image-overlay {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  min-width: 12px;
+  min-height: 12px;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  line-height: 0;
+  pointer-events: auto;
+  cursor: grab;
+  transform-origin: center;
+  box-shadow: none;
+  touch-action: none;
+  contain: layout style;
+  will-change: left, top, width, transform, opacity;
+  backface-visibility: hidden;
+}
+
+.lossless-image-overlay:hover {
+  outline: 1px solid color-mix(in srgb, var(--color-primary) 86%, #ffffff);
+  outline-offset: 2px;
+}
+
+.lossless-image-overlay.is-selected {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 88%, #ffffff);
+  outline-offset: 2px;
+}
+
+.lossless-image-overlay:active {
+  cursor: grabbing;
+}
+
+.lossless-image-overlay img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+.lossless-image-transform-handle,
+.lossless-image-rotation-handle {
+  position: absolute;
+  z-index: 2;
+  margin: 0;
+  border: 1px solid var(--color-primary);
   background: var(--card-bg);
+  color: var(--color-primary);
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.lossless-image-transform-handle {
+  width: 10px;
+  min-width: 10px;
+  height: 10px;
+  min-height: 10px;
+  border-radius: 50%;
+  cursor: nwse-resize;
+}
+
+.lossless-image-transform-handle.is-nw {
+  top: -7px;
+  left: -7px;
+}
+
+.lossless-image-transform-handle.is-ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+
+.lossless-image-transform-handle.is-n {
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.lossless-image-transform-handle.is-e {
+  top: 50%;
+  right: -7px;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.lossless-image-transform-handle.is-sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+
+.lossless-image-transform-handle.is-se {
+  right: -9px;
+  bottom: -9px;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  min-height: 14px;
+  border-radius: 1px;
+  background: var(--card-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 70%, transparent);
+}
+
+.lossless-image-transform-handle.is-s {
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.lossless-image-transform-handle.is-w {
+  top: 50%;
+  left: -7px;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.lossless-image-rotation-handle {
+  top: -32px;
+  left: 50%;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  border-radius: 50%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px 36px;
+  place-items: center;
+  transform: translateX(-50%);
+  cursor: grab;
+}
+
+.lossless-image-rotation-handle::after {
+  content: "";
+  position: absolute;
+  top: 19px;
+  left: 9px;
+  width: 1px;
+  height: 11px;
+  background: var(--color-primary);
+}
+
+.lossless-image-rotation-handle:active {
+  cursor: grabbing;
+}
+
+.lossless-drop {
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-color-light);
+  color: var(--text-color);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  padding: 20px;
+}
+
+.lossless-drop:hover:not(:disabled) {
+  background: var(--bg-color-light);
+}
+
+.lossless-drop span {
+  color: var(--text-color-secend);
+  font-size: 15px;
+}
+
+.lossless-transport-buttons > button,
+.lossless-timeline-mute {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lossless-timeline-transport .lossless-play-button {
+  color: var(--bg-color);
+  background: var(--text-color);
+  border-color: var(--text-color);
+}
+
+.lossless-timeline-transport .lossless-play-button:hover:not(:disabled),
+.lossless-timeline-transport .lossless-play-button:focus-visible,
+.lossless-timeline-transport .lossless-play-button:active:not(:disabled) {
+  color: var(--bg-color);
+  background: var(--text-color);
+  border-color: var(--text-color);
+}
+
+.lossless-timeline-transport .lossless-play-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.lossless-timecode {
+  color: var(--text-color-secend);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lossless-timeline-toolbar input {
+  width: 100%;
+  accent-color: var(--text-color);
+}
+
+.lossless-transport-select.app-select {
+  width: 74px;
+  min-width: 74px !important;
+}
+
+.lossless-transport-select .app-select-trigger {
+  height: 26px;
+  min-height: 26px;
+  gap: 5px;
+  padding: 0 6px 0 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-transport-select .app-select-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
+.lossless-transport-menu {
+  padding: 2px;
+  font-size: 13px;
+  scrollbar-width: thin;
+}
+
+.lossless-transport-menu button {
+  position: relative;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-transport-menu button span {
+  overflow: visible;
+  text-overflow: clip;
+  text-align: center;
+}
+
+.lossless-transport-menu::-webkit-scrollbar {
+  width: 4px;
+}
+
+.lossless-task-strip {
+  min-width: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+
+.lossless-task-strip .lossless-status {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 20px auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  padding: 0 8px;
+  padding: 4px 10px;
+  font-size: 15px;
 }
 
-.lossless-settings-grid label span {
+.lossless-task-strip .lossless-status span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.lossless-settings-grid input {
-  width: 100%;
-  height: 28px;
-  text-align: right;
-  padding: 0 6px;
-}
-
-.lossless-settings-grid em {
+.lossless-task-strip .lossless-status em {
   font-style: normal;
+  font-variant-numeric: tabular-nums;
 }
 
-.lossless-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.lossless-check input,
-.lossless-row-check input {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--text-color);
-}
-
-.lossless-mode {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-}
-
-.lossless-crop-hint {
-  min-height: 34px;
-  border: 1px solid color-mix(in srgb, var(--color-warning) 42%, var(--border-color));
-  background: color-mix(in srgb, var(--color-warning) 8%, var(--card-bg));
-  color: var(--color-warning);
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-}
-
-.lossless-progress {
-  border-bottom: 1px solid var(--border-color);
-  padding: 10px 12px;
-  display: grid;
-  gap: 8px;
-}
-
-.lossless-status {
-  display: grid;
-  grid-template-columns: 22px auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.lossless-status strong {
-  white-space: nowrap;
-}
-
-.lossless-status em {
-  color: var(--text-color-secend);
-  font-style: normal;
-  white-space: nowrap;
-}
-
-.lossless-status.status-error {
+.lossless-task-strip .lossless-status.status-error {
   color: var(--color-danger);
 }
 
-.lossless-progress-bar {
-  height: 8px;
+.lossless-task-strip .lossless-progress-bar {
+  height: 3px;
+  border: 0;
   background: var(--bg-color-light);
-  border: 1px solid var(--border-color);
 }
 
-.lossless-progress-bar i {
+.lossless-task-strip .lossless-progress-bar i {
   height: 100%;
   display: block;
   background: var(--color-primary);
   transition: width 0.2s ease;
 }
 
-.lossless-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.lossless-error {
+.lossless-task-strip .lossless-error {
   border: 1px solid color-mix(in srgb, var(--color-danger) 45%, var(--border-color));
+  border-width: 1px 0 0;
   color: var(--color-danger);
   background: color-mix(in srgb, var(--color-danger) 7%, var(--card-bg));
-  padding: 8px 10px;
+  padding: 6px 10px;
+  font-size: 15px;
 }
 
-.lossless-segments {
+.lossless-timeline {
+  min-width: 0;
+  min-height: 0;
+  container-name: lossless-timeline;
+  container-type: inline-size;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--bg-color-light);
+  color: var(--text-color);
+}
+
+.lossless-timeline-toolbar {
+  min-height: 34px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--card-bg);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 0 9px;
+  font-size: 14px;
+}
+
+.lossless-timeline-track-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.lossless-timeline-track-actions > strong {
+  margin-right: 2px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.lossless-timeline-track-actions button {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lossless-timeline-track-actions span {
+  min-width: 0;
+  color: var(--text-color-secend);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-timeline-transport {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.lossless-timeline-transport .lossless-transport-buttons {
+  gap: 4px;
+}
+
+.lossless-timeline-transport .lossless-timecode {
+  min-width: 201px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.lossless-timeline-mute {
+  flex: 0 0 26px;
+}
+
+.lossless-timeline-toolbar-end {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 10px;
+}
+
+.lossless-timeline-zoom-control {
+  justify-self: end;
+  width: min(100%, 260px);
+  display: grid;
+  grid-template-columns: 16px minmax(80px, 1fr) 52px;
+  align-items: center;
+  gap: 7px;
+}
+
+.lossless-timeline-toolbar em {
+  color: var(--text-color-secend);
+  font-style: normal;
+  text-align: right;
+}
+
+@container lossless-timeline (max-width: 1100px) {
+  .lossless-timeline-toolbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+
+  .lossless-timeline-transport {
+    gap: 4px;
+  }
+
+  .lossless-timeline-transport .lossless-timecode {
+    min-width: 190px;
+  }
+
+  .lossless-timeline-toolbar-end {
+    gap: 8px;
+  }
+
+  .lossless-timeline-zoom-control {
+    width: clamp(170px, 21cqi, 220px);
+  }
+}
+
+@container lossless-timeline (max-width: 820px) {
+  .lossless-timeline-toolbar {
+    grid-template-columns: minmax(180px, 1fr) auto;
+    grid-template-rows: 32px 32px;
+    gap: 0 10px;
+  }
+
+  .lossless-timeline-track-actions {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .lossless-timeline-transport {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: center;
+  }
+
+  .lossless-timeline-toolbar-end {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+.lossless-timeline-scroll {
+  min-width: 0;
   min-height: 0;
   overflow: auto;
 }
 
-.lossless-segment-row {
-  min-width: 1330px;
-  min-height: 46px;
-  display: grid;
-  grid-template-columns: 128px 170px 170px 240px 92px 190px 104px 126px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border-color);
+.lossless-timeline-canvas {
+  position: relative;
+  min-width: 100%;
+  height: 100%;
 }
 
-.lossless-segment-row > :nth-child(4) {
+.lossless-timeline-content {
+  position: relative;
+  min-width: 0;
+  height: 100%;
+  margin-inline: 7px;
+}
+
+.lossless-timeline-ruler {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  width: 100%;
+  height: 28px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-color-light);
+  overflow: hidden;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.lossless-timeline-ruler:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+.lossless-timeline-ruler-progress {
+  position: absolute;
+  z-index: 0;
+  inset: 0 auto 0 0;
+  border-bottom: 2px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
+  pointer-events: none;
+}
+
+.lossless-timeline-ruler span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  height: 100%;
+  pointer-events: none;
+}
+
+.lossless-timeline-ruler span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 6px;
+  background: color-mix(in srgb, var(--text-color-secend) 48%, transparent);
+}
+
+.lossless-timeline-ruler span.is-medium::before {
+  height: 10px;
+  background: color-mix(in srgb, var(--text-color-secend) 68%, transparent);
+}
+
+.lossless-timeline-ruler span.is-major::before {
+  height: 16px;
+  background: var(--text-color-secend);
+}
+
+.lossless-timeline-ruler span.is-frame::before {
+  height: 5px;
+  background: color-mix(in srgb, var(--text-color-secend) 38%, transparent);
+}
+
+.lossless-timeline-ruler time {
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  color: var(--text-color-secend);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.lossless-segment-head {
-  position: sticky;
-  top: 0;
+.lossless-timeline-grid-lines {
+  position: absolute;
   z-index: 2;
-  min-height: 40px;
-  background: #111111;
-  color: #ffffff;
+  inset: 28px 0 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
-.lossless-segment-row:not(.lossless-segment-head):hover {
-  background: var(--menu-hover);
+.lossless-timeline-grid-lines i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--border-color) 34%, transparent);
 }
 
-.lossless-row-check,
-.lossless-locate {
+.lossless-timeline-grid-lines i.is-medium {
+  background: color-mix(in srgb, var(--border-color) 52%, transparent);
+}
+
+.lossless-timeline-grid-lines i.is-major {
+  background: color-mix(in srgb, var(--text-color-secend) 42%, transparent);
+}
+
+.lossless-timeline-grid-lines i.is-frame {
+  background: color-mix(in srgb, var(--border-color) 24%, transparent);
+}
+
+.lossless-source-track,
+.lossless-candidate-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 28px;
+}
+
+.lossless-source-track {
+  top: 34px;
+  border: 1px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--card-bg));
+  overflow: hidden;
+}
+
+.lossless-source-track span {
+  max-width: 100%;
+  height: 100%;
+  color: var(--text-color);
+  display: block;
+  padding: 3px 8px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-candidate-track {
+  top: 68px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+
+.lossless-candidate-track button {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 3px;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  opacity: 0.95;
+}
+
+.lossless-candidate-track button.is-repeat {
+  background: var(--color-danger);
+}
+
+.lossless-candidate-track button.is-transition {
+  background: var(--color-warning);
+}
+
+.lossless-candidate-track button.is-kept {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-color-secend);
+  opacity: 0.72;
+}
+
+.lossless-media-track-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.lossless-media-track-row.is-selected {
+  border-color: var(--color-primary);
+}
+
+.lossless-media-track-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 18px;
+  min-height: 22px;
+  border: 0;
+  border-radius: 1px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--text-color);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.lossless-media-track-clip:active {
+  cursor: grabbing;
+}
+
+.lossless-media-track-handle {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  background: color-mix(in srgb, var(--card-bg) 72%, transparent);
+  opacity: 0;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.lossless-media-track-handle::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: currentColor;
+}
+
+.lossless-media-track-handle.is-start {
+  left: 0;
+}
+
+.lossless-media-track-handle.is-start::after {
+  left: 3px;
+}
+
+.lossless-media-track-handle.is-end {
+  right: 0;
+}
+
+.lossless-media-track-handle.is-end::after {
+  right: 3px;
+}
+
+.lossless-media-track-clip:hover .lossless-media-track-handle,
+.lossless-media-track-clip.is-selected .lossless-media-track-handle {
+  opacity: 1;
+}
+
+.lossless-media-track-row.is-audio .lossless-media-track-clip {
+  background: color-mix(in srgb, var(--color-green) 25%, var(--card-bg));
+  box-shadow: none;
+}
+
+.lossless-media-track-row.is-image .lossless-media-track-clip {
+  background: color-mix(in srgb, var(--color-primary) 20%, var(--card-bg));
+  box-shadow: none;
+}
+
+.lossless-media-track-clip.is-selected {
+  z-index: 3;
+  border: 1px solid var(--color-primary);
+  outline: 0;
+  box-shadow: none;
+}
+
+.lossless-media-track-clip.is-disabled {
+  opacity: 0.42;
+  filter: saturate(0.45);
+}
+
+.lossless-media-track-clip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.lossless-keyframe-point {
+  position: absolute;
+  z-index: 3;
+  top: 7px;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  min-height: 14px;
+  margin-left: -7px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-warning);
+  padding: 0;
+  display: grid;
+  place-items: center;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.lossless-keyframe-point.is-selected {
+  color: var(--color-primary);
+}
+
+.lossless-playhead {
+  position: absolute;
+  z-index: 4;
+  top: 20px;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-primary);
+  pointer-events: none;
+}
+
+.lossless-playhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 9px;
+  height: 7px;
+  background: var(--color-primary);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.lossless-inspector {
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border-color);
+  background: var(--card-bg);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.lossless-inspector-content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.lossless-detect-inspector {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.lossless-export-inspector {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.lossless-export-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.lossless-detect-tabs {
+  padding: 0 12px 10px;
+}
+
+.lossless-detect-tabs .lossless-result-filters {
+  margin-top: 0;
+}
+
+.lossless-detect-body {
+  min-height: 0;
+}
+
+.lossless-detect-body.is-settings {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.lossless-detect-body.is-results {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.lossless-inspector-section {
+  border-bottom: 1px solid var(--border-color);
+  padding: 13px 12px;
+}
+
+.lossless-inspector-section h3 {
+  margin: 0 0 9px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.lossless-section-title-row {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lossless-section-title-row h3 {
+  margin: 0;
+}
+
+.lossless-section-title-row > span {
+  color: var(--text-color-secend);
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-section-title-row > button {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
   display: inline-flex;
   align-items: center;
+  gap: 5px;
+}
+
+.lossless-track-add-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
-  min-width: 0;
+  margin: 7px 0;
 }
 
-.lossless-locate button {
-  height: 30px;
+.lossless-track-add-actions button {
+  min-height: 32px;
   padding: 0 8px;
-}
-
-.lossless-transition-note {
-  display: block;
-  margin-top: 3px;
-  color: var(--color-warning);
-  line-height: 1.2;
-}
-
-.lossless-tag {
-  min-height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-color);
-  padding: 0 8px;
+  gap: 6px;
+}
+
+.lossless-selected-track {
+  min-width: 0;
+  min-height: 46px;
+  margin: -2px 0 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 66px 28px;
+  align-items: center;
+  gap: 6px;
+}
+
+.lossless-selected-track > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.lossless-selected-track > div > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.lossless-selected-track strong,
+.lossless-selected-track small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.lossless-tag.safe {
+.lossless-selected-track strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.lossless-selected-track small {
+  color: var(--text-color-secend);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-selected-track > .app-switch {
+  width: 66px;
+  justify-self: end;
+}
+
+.lossless-selected-track > .lossless-remove-track {
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  min-height: 27px;
+  padding: 0;
+  color: var(--color-danger);
+  display: grid;
+  place-items: center;
+}
+
+.lossless-track-empty {
+  min-height: 74px;
+  color: var(--text-color-secend);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  font-size: 14px;
+}
+
+.lossless-slider-field {
+  min-height: 39px;
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+}
+
+.lossless-slider-field input {
+  width: 100%;
+  accent-color: var(--color-primary);
+}
+
+.lossless-slider-field em {
+  color: var(--text-color-secend);
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-keyframe-toolbar {
+  min-height: 43px;
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lossless-keyframe-toolbar > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.lossless-keyframe-toolbar strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.lossless-keyframe-toolbar small {
+  color: var(--text-color-secend);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-keyframe-toolbar > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lossless-keyframe-toolbar button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--text-color-secend);
+  display: grid;
+  place-items: center;
+}
+
+.lossless-keyframe-toolbar button.is-active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+.lossless-add-keyframe-icon {
+  position: relative;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+}
+
+.lossless-add-keyframe-icon svg:last-child {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  color: var(--color-primary);
+  background: var(--card-bg);
+}
+
+.lossless-transform-controls {
+  display: grid;
+  gap: 4px;
+}
+
+.lossless-transform-row {
+  min-height: 39px;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.lossless-transform-row.is-position,
+.lossless-transform-row.is-size {
+  grid-template-columns: 66px repeat(2, minmax(0, 1fr));
+}
+
+.lossless-transform-row.is-opacity {
+  grid-template-columns: 76px minmax(0, 1fr) 38px;
+}
+
+.lossless-transform-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-color-secend);
+}
+
+.lossless-transform-label b {
+  color: var(--text-color);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.lossless-transform-row label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 3px;
+}
+
+.lossless-transform-row.is-position label,
+.lossless-transform-row.is-size label {
+  grid-template-columns: 12px minmax(0, 1fr) 18px;
+}
+
+.lossless-transform-row label > span,
+.lossless-transform-row em {
+  color: var(--text-color-secend);
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-transform-row input[type="number"],
+.lossless-transform-row select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 5px;
+}
+
+.lossless-transform-row input[type="number"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-transform-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--color-primary);
+}
+
+.lossless-transform-row.is-easing {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.lossless-reset-transform {
+  width: 100%;
+  min-height: 31px;
+  margin-top: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.lossless-inspector-field {
+  min-height: 36px;
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-color-secend);
+}
+
+.lossless-inspector-field > span:last-child {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 5px;
+}
+
+.lossless-inspector-field input {
+  width: 100%;
+  height: 28px;
+  padding: 0 6px;
+  text-align: right;
+}
+
+.lossless-inspector-field em {
+  color: var(--text-color-secend);
+  font-style: normal;
+}
+
+.lossless-switch-row {
+  min-height: 38px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-color-secend);
+}
+
+.lossless-switch-row .app-switch {
+  flex: 0 0 66px;
+}
+
+.lossless-audio-separation-controls {
+  display: grid;
+  gap: 4px;
+}
+
+.lossless-audio-option-row {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 152px;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.lossless-audio-option-row select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+}
+
+.lossless-audio-option-row .app-select,
+.lossless-transform-row .app-select {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.lossless-audio-option-row .app-select-trigger {
+  height: 26px;
+  min-height: 26px;
+  gap: 5px;
+  padding: 0 6px 0 8px;
+  font-size: 12px;
+}
+
+.lossless-audio-option-row .app-select-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
+.lossless-audio-select-menu {
+  padding: 3px;
+  font-size: 13px;
+}
+
+.lossless-audio-select-menu button {
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.lossless-audio-option-row.is-range {
+  grid-template-columns: 74px minmax(0, 1fr) 38px;
+}
+
+.lossless-audio-option-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--text-color);
+}
+
+.lossless-audio-option-row em {
+  color: var(--text-color-secend);
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-audio-engine-status {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 7px;
+}
+
+.lossless-audio-engine-status > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.lossless-audio-engine-status strong,
+.lossless-audio-engine-status small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-audio-engine-status strong {
+  color: var(--text-color);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.lossless-audio-engine-status small {
+  color: var(--text-color-secend);
+  font-size: 11px;
+}
+
+.lossless-audio-engine-status.is-ready > svg {
+  color: var(--color-green);
+}
+
+.lossless-audio-engine-status.is-loading > svg {
+  color: var(--color-primary);
+}
+
+.lossless-audio-engine-status.is-unavailable > svg {
+  color: var(--color-warning);
+}
+
+.lossless-audio-engine-status > button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.lossless-inspector-summary dl {
+  min-height: 31px;
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.lossless-inspector-summary dt {
+  color: var(--text-color-secend);
+}
+
+.lossless-inspector-summary dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.lossless-mode-control {
+  min-height: 34px;
+}
+
+.lossless-mode-control button {
+  height: 32px;
+  font-size: 14px;
+}
+
+.lossless-export-boundary {
+  margin-top: 9px;
+  border: 1px solid var(--border-color);
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  padding: 9px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.lossless-export-boundary.is-lossless {
   color: var(--color-green);
   border-color: color-mix(in srgb, var(--color-green) 48%, var(--border-color));
 }
 
-.lossless-tag.warn {
+.lossless-export-boundary.is-reencode {
   color: var(--color-warning);
-  border-color: color-mix(in srgb, var(--color-warning) 52%, var(--border-color));
+  border-color: color-mix(in srgb, var(--color-warning) 50%, var(--border-color));
 }
 
-.lossless-empty {
+.lossless-inspector-action {
+  width: calc(100% - 24px);
+  height: 38px;
+  margin: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.lossless-inspector-action.primary-button,
+.lossless-inspector-action.primary-button:hover:not(:disabled),
+.lossless-inspector-action.primary-button:focus-visible {
+  color: #ffffff;
+  background: var(--text-color);
+  border-color: var(--bg-color);
+}
+
+[data-theme="dark"] .lossless-inspector-action.primary-button,
+[data-theme="dark"] .lossless-inspector-action.primary-button:hover:not(:disabled),
+[data-theme="dark"] .lossless-inspector-action.primary-button:focus-visible {
+  color: #06171b;
+}
+
+.lossless-result-section {
+  flex: 1;
+  min-height: 0;
+  border-bottom: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding-bottom: 0;
+}
+
+.lossless-result-filters.segmented-control {
+  min-height: 32px;
+  margin-top: 0;
+}
+
+.lossless-result-filters.segmented-control button {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 6px;
+  font-size: 13px;
+}
+
+.lossless-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 7px 0;
+}
+
+.lossless-result-actions button {
+  height: 27px;
+  min-height: 27px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.lossless-result-list {
+  min-height: 0;
+  border-top: 1px solid var(--border-color);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.lossless-result-item {
   min-width: 0;
+  min-height: 42px;
+  border-bottom: 1px solid var(--border-color);
+  display: grid;
+  grid-template-columns: 20px 35px minmax(0, 1fr) auto 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+}
+
+.lossless-result-item:hover {
+  background: var(--menu-hover);
+}
+
+.lossless-result-item.is-kept {
+  opacity: 0.58;
+}
+
+.lossless-result-item > label {
+  display: grid;
+  place-items: center;
+}
+
+.lossless-result-item input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-danger);
+}
+
+.lossless-result-item b {
+  min-width: 35px;
+  height: 19px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.lossless-result-item b.is-repeat {
+  color: var(--color-danger);
+}
+
+.lossless-result-item b.is-transition {
+  color: var(--color-warning);
+}
+
+.lossless-result-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-result-item small {
+  color: var(--text-color-secend);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lossless-result-confidence.is-lower {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.lossless-result-confidence.is-much-lower {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.lossless-result-confidence.is-higher {
+  color: var(--color-green);
+  font-weight: 600;
+}
+
+.lossless-result-item > button {
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  min-height: 27px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.lossless-result-empty {
+  min-height: 86px;
+  color: var(--text-color-secend);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+@media (max-width: 1500px) {
+  .lossless-video-toolbar {
+    grid-template-columns: minmax(300px, 1fr) auto 350px;
+  }
+
+  .lossless-editing-layout {
+    grid-template-columns: minmax(500px, 1fr) 350px;
+  }
+
+  .lossless-file-chip {
+    width: 100%;
+  }
+
+  .lossless-inspector-section {
+    padding-inline: 10px;
+  }
+
+  .lossless-mode-control button {
+    font-size: 13px;
+  }
+}
+
+@media (max-height: 820px) {
+  .lossless-video-body {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .lossless-editor {
+    grid-template-rows: minmax(190px, 1fr) auto 170px;
+  }
+
+  .lossless-timeline {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
 }
 
 .cover-maker-panel {

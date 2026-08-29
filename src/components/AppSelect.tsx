@@ -1,4 +1,4 @@
-import { Check, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -16,6 +16,8 @@ type Props<T extends string | number> = {
   className?: string;
   triggerClassName?: string;
   menuClassName?: string;
+  menuMinWidth?: number;
+  matchTriggerWidth?: boolean;
   maxMenuHeight?: number;
   ariaLabel?: string;
 };
@@ -36,6 +38,8 @@ export default function AppSelect<T extends string | number>({
   className = "",
   triggerClassName = "",
   menuClassName = "",
+  menuMinWidth = 0,
+  matchTriggerWidth = false,
   maxMenuHeight = 340,
   ariaLabel
 }: Props<T>) {
@@ -56,7 +60,10 @@ export default function AppSelect<T extends string | number>({
       const rect = rootRef.current?.getBoundingClientRect();
       if (!rect) return;
       const estimatedHeight = Math.min(maxMenuHeight, options.length * 40 + 8);
-      const width = Math.min(Math.max(rect.width, contentWidth), Math.min(340, window.innerWidth - 16));
+      const width = Math.min(
+        matchTriggerWidth ? rect.width : Math.max(rect.width, contentWidth, menuMinWidth),
+        Math.min(340, window.innerWidth - 16)
+      );
       const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8));
       const below = window.innerHeight - rect.bottom - 8;
       const above = rect.top - 8;
@@ -90,7 +97,7 @@ export default function AppSelect<T extends string | number>({
       window.removeEventListener("scroll", syncMenu, true);
       window.removeEventListener("keydown", closeOnEsc);
     };
-  }, [contentWidth, maxMenuHeight, open, options.length]);
+  }, [contentWidth, matchTriggerWidth, maxMenuHeight, menuMinWidth, open, options.length]);
 
   return (
     <div className={`app-select ${className}`.trim()} ref={rootRef} style={{ minWidth: contentWidth }}>
@@ -132,7 +139,6 @@ export default function AppSelect<T extends string | number>({
                     setOpen(false);
                   }}
                 >
-                  <Check size={15} />
                   <span>{item.label}</span>
                 </button>
               ))}

@@ -226,10 +226,10 @@ export const menuGroups: MenuGroup[] = [
     children: [
       {
         key: "lossless-video",
-        label: "无损处理",
+        label: "视频剪辑",
         icon: Scissors,
         path: "/lossless-video",
-        description: "检测长视频中相邻重复片段，默认删除第二次出现并导出 MP4。",
+        description: "预览并检测长视频中的重复片段、上滑转场和画面黑边，整理后导出 MP4。",
         hideOverview: true
       },
       {

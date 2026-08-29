@@ -1,6 +1,27 @@
-import { postReq, type ApiResponse } from "../utils/request";
+import { getReq, postReq, type ApiResponse } from "../utils/request";
 
 export type LosslessCutMode = "keyframe-copy" | "precise-reencode" | "hybrid";
+export type AudioSeparationQuality = "fast" | "standard" | "high";
+export type AudioSeparationMode = "vocals" | "dialogue";
+export type DialogueStrength = "conservative" | "standard" | "strong";
+
+export type AudioSeparationOptions = {
+  enabled: boolean;
+  mode: AudioSeparationMode;
+  quality: AudioSeparationQuality;
+  dialogueStrength: DialogueStrength;
+  backgroundVolume: number;
+};
+
+export type AudioSeparationStatus = {
+  available: boolean;
+  engine?: string;
+  version?: string;
+  device?: string;
+  modelReady: boolean;
+  dialogueReady?: boolean;
+  message?: string;
+};
 
 export type DetectParams = {
   maxSearchWindowSec: number;
@@ -45,7 +66,40 @@ export type DuplicateSegment = {
   note?: string;
 };
 
+export type MediaKeyframe = {
+  id: string;
+  time: number;
+  x: number;
+  y: number;
+  width: number;
+  height?: number;
+  rotation: number;
+  opacity?: number;
+  easing?: "linear" | "ease-in" | "ease-out" | "ease-in-out";
+};
+
+export type ExportMediaTrack = {
+  id: string;
+  type: "audio" | "image";
+  name: string;
+  start: number;
+  end: number;
+  enabled: boolean;
+  volume?: number;
+  opacity?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  loop?: boolean;
+  keyframes?: MediaKeyframe[];
+};
+
+export type ExportTrackAsset = {
+  trackId: string;
+  file: File;
+};
+
 export type DetectRequest = {
+  taskId?: string;
   file?: File;
   input: VideoInput;
   params: DetectParams;
@@ -64,10 +118,12 @@ export type ExportRequest = {
   taskId?: string;
   input: VideoInput;
   segments: DuplicateSegment[];
+  tracks?: ExportMediaTrack[];
   mode: LosslessCutMode;
   outputName?: string;
   autoCropBlackBars?: boolean;
   cropRect?: CropRect;
+  audioSeparation?: AudioSeparationOptions;
 };
 
 export type ExportResponse = {
@@ -75,6 +131,18 @@ export type ExportResponse = {
   outputPath?: string;
   downloadUrl?: string;
   message?: string;
+};
+
+export type VideoTaskInfo = {
+  taskId: string;
+  status: string;
+  progress: number;
+  stage?: string;
+  message?: string;
+  duration?: number;
+  segments?: DuplicateSegment[];
+  cropRect?: CropRect;
+  outputPath?: string;
 };
 
 function unwrap<T>(resp: ApiResponse<T>) {
@@ -88,7 +156,14 @@ export function hasVideoProcessor() {
   return true;
 }
 
-export async function detectDuplicateSegments(request: DetectRequest, signal?: AbortSignal) {
+export function createVideoTaskId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `video-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+export async function detectDuplicateSegments(request: DetectRequest, signal?: AbortSignal, onUploadProgress?: (fraction: number) => void) {
   if (!request.file) {
     throw new Error("请重新选择视频文件后再检测");
   }
@@ -96,18 +171,58 @@ export async function detectDuplicateSegments(request: DetectRequest, signal?: A
   formData.append("file", request.file);
   formData.append("input", JSON.stringify(request.input));
   formData.append("params", JSON.stringify(request.params));
-  const resp = await postReq<DetectResponse>("/check/video/detect", formData, {
+  const taskQuery = request.taskId ? `?taskId=${encodeURIComponent(request.taskId)}` : "";
+  const resp = await postReq<DetectResponse>(`/check/video/detect${taskQuery}`, formData, {
     headers: { "Content-Type": "multipart/form-data" },
     signal,
-    timeout: 0
+    timeout: 0,
+    onUploadProgress: (event) => {
+      const total = Number(event.total || 0);
+      if (total > 0) {
+        onUploadProgress?.(Math.min(1, Math.max(0, event.loaded / total)));
+      }
+    }
   });
   return unwrap(resp);
 }
 
-export async function exportCleanVideo(request: ExportRequest, signal?: AbortSignal) {
-  const resp = await postReq<ExportResponse>("/check/video/export", request, {
+export async function getVideoTaskInfo(taskId: string) {
+  const resp = await postReq<VideoTaskInfo>("/check/video/task/info", { taskId }, { timeout: 0 });
+  return unwrap(resp);
+}
+
+export async function getAudioSeparationStatus(
+  quality: AudioSeparationQuality = "standard",
+  mode: AudioSeparationMode = "vocals"
+) {
+  const resp = await getReq<AudioSeparationStatus>("/check/video/audio-separation/status", { quality, mode }, { timeout: 60_000 });
+  return unwrap(resp);
+}
+
+export async function exportCleanVideo(
+  request: ExportRequest,
+  signal?: AbortSignal,
+  assets: ExportTrackAsset[] = [],
+  sourceFile?: File,
+  onUploadProgress?: (fraction: number) => void
+) {
+  const payload: ExportRequest | FormData = assets.length || sourceFile
+    ? (() => {
+        const formData = new FormData();
+        formData.append("request", JSON.stringify(request));
+        if (sourceFile) formData.append("source", sourceFile, sourceFile.name);
+        assets.forEach((asset) => formData.append(`asset_${asset.trackId}`, asset.file, asset.file.name));
+        return formData;
+      })()
+    : request;
+  const resp = await postReq<ExportResponse>("/check/video/export", payload, {
+    headers: payload instanceof FormData ? { "Content-Type": "multipart/form-data" } : undefined,
     signal,
-    timeout: 0
+    timeout: 0,
+    onUploadProgress: (event) => {
+      const total = Number(event.total || 0);
+      if (total > 0) onUploadProgress?.(Math.min(1, Math.max(0, event.loaded / total)));
+    }
   });
   return unwrap(resp);
 }
