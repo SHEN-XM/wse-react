@@ -388,7 +388,6 @@ function pickTimelineMajorStep(targetSeconds: number, fps: number) {
     15,
     30,
     60,
-    120,
     180,
     300,
     600,
@@ -1154,7 +1153,7 @@ export default function LosslessVideoPage() {
     const canvasWidth = Math.max(1, viewportWidth * timelineCanvasZoom - timelineEdgeSpacePx * 2);
     const pixelsPerSecond = canvasWidth / Math.max(0.001, timelineDisplayDuration);
     const frameStep = 1 / timelineFps;
-    const majorStep = pickTimelineMajorStep(110 / Math.max(0.000001, pixelsPerSecond), timelineFps);
+    const majorStep = pickTimelineMajorStep(96 / Math.max(0.000001, pixelsPerSecond), timelineFps);
     const subdivisionCount = pickTimelineSubdivisionCount(majorStep, timelineFps);
     const minorStep = majorStep / subdivisionCount;
     const buffer = viewportWidth * 0.5;
