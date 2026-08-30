@@ -18,6 +18,9 @@ export type AudioSeparationStatus = {
   engine?: string;
   version?: string;
   device?: string;
+  platform?: string;
+  videoEncoder?: string;
+  videoHardware?: boolean;
   modelReady: boolean;
   dialogueReady?: boolean;
   message?: string;
@@ -80,6 +83,8 @@ export type MediaKeyframe = {
 
 export type ExportMediaTrack = {
   id: string;
+  laneId: string;
+  layer: number;
   type: "audio" | "image";
   name: string;
   start: number;
@@ -93,8 +98,26 @@ export type ExportMediaTrack = {
   keyframes?: MediaKeyframe[];
 };
 
+export type ExportVideoClip = {
+  id: string;
+  sourceId: string;
+  laneId: string;
+  layer: number;
+  name: string;
+  start: number;
+  end: number;
+  sourceStart: number;
+  sourceEnd: number;
+  primary: boolean;
+};
+
 export type ExportTrackAsset = {
   trackId: string;
+  file: File;
+};
+
+export type ExportVideoAsset = {
+  sourceId: string;
   file: File;
 };
 
@@ -117,8 +140,13 @@ export type DetectResponse = {
 export type ExportRequest = {
   taskId?: string;
   input: VideoInput;
+  projectDuration: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  frameRate: number;
   segments: DuplicateSegment[];
   tracks?: ExportMediaTrack[];
+  videoClips?: ExportVideoClip[];
   mode: LosslessCutMode;
   outputName?: string;
   autoCropBlackBars?: boolean;
@@ -203,15 +231,17 @@ export async function exportCleanVideo(
   request: ExportRequest,
   signal?: AbortSignal,
   assets: ExportTrackAsset[] = [],
+  videoAssets: ExportVideoAsset[] = [],
   sourceFile?: File,
   onUploadProgress?: (fraction: number) => void
 ) {
-  const payload: ExportRequest | FormData = assets.length || sourceFile
+  const payload: ExportRequest | FormData = assets.length || videoAssets.length || sourceFile
     ? (() => {
         const formData = new FormData();
         formData.append("request", JSON.stringify(request));
         if (sourceFile) formData.append("source", sourceFile, sourceFile.name);
         assets.forEach((asset) => formData.append(`asset_${asset.trackId}`, asset.file, asset.file.name));
+        videoAssets.forEach((asset) => formData.append(`video_asset_${asset.sourceId}`, asset.file, asset.file.name));
         return formData;
       })()
     : request;

@@ -5004,13 +5004,6 @@ input {
   gap: 6px;
 }
 
-.lossless-toolbar-separator {
-  width: 1px;
-  height: 24px;
-  margin: 0 2px;
-  background: var(--border-color);
-}
-
 .lossless-video-toolbar .lossless-icon-button {
   width: 34px;
   min-width: 34px;
@@ -5119,10 +5112,6 @@ input {
   background: var(--card-bg);
 }
 
-.lossless-viewer.is-dragging {
-  box-shadow: inset 0 0 0 2px var(--color-primary);
-}
-
 .lossless-viewer-titlebar {
   min-width: 0;
   border-bottom: 1px solid var(--border-color);
@@ -5156,6 +5145,13 @@ input {
   display: block;
   object-fit: contain;
   object-position: center;
+  background: #000000;
+  cursor: pointer;
+}
+
+.lossless-preview-canvas {
+  position: absolute;
+  inset: 0;
   background: #000000;
   cursor: pointer;
 }
@@ -5396,15 +5392,6 @@ input {
   align-content: center;
   gap: 9px;
   padding: 20px;
-}
-
-.lossless-drop:hover:not(:disabled) {
-  background: var(--bg-color-light);
-}
-
-.lossless-drop span {
-  color: var(--text-color-secend);
-  font-size: 15px;
 }
 
 .lossless-transport-buttons > button,
@@ -5715,6 +5702,16 @@ input {
   margin-inline: 7px;
 }
 
+.lossless-timeline-content.is-resource-dragging::after {
+  content: "";
+  position: absolute;
+  z-index: 8;
+  inset: 28px 0 0;
+  border: 1px dashed var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 7%, transparent);
+  pointer-events: none;
+}
+
 .lossless-timeline-ruler {
   position: sticky;
   z-index: 3;
@@ -5844,7 +5841,7 @@ input {
 }
 
 .lossless-candidate-track {
-  top: 68px;
+  top: 34px;
   border: 1px solid var(--border-color);
   background: var(--card-bg);
 }
@@ -5955,6 +5952,11 @@ input {
 
 .lossless-media-track-row.is-audio .lossless-media-track-clip {
   background: color-mix(in srgb, var(--color-green) 25%, var(--card-bg));
+  box-shadow: none;
+}
+
+.lossless-media-track-row.is-video .lossless-media-track-clip {
+  background: color-mix(in srgb, var(--color-primary) 28%, var(--card-bg));
   box-shadow: none;
 }
 
@@ -6137,6 +6139,192 @@ input {
   gap: 6px;
 }
 
+.lossless-resource-bin {
+  margin-top: 7px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.lossless-resource-bin.is-dragging {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 9%, var(--bg-color-light));
+}
+
+.lossless-resource-library-bar {
+  height: 30px;
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lossless-resource-library-bar > strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lossless-resource-library-bar > button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lossless-resource-grid {
+  max-height: min(370px, 44vh);
+  padding: 1px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: 9px 7px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.lossless-resource-card {
+  min-width: 0;
+  padding: 0;
+  outline: 0;
+  display: grid;
+  gap: 3px;
+  cursor: grab;
+  user-select: none;
+}
+
+.lossless-resource-card:active {
+  cursor: grabbing;
+}
+
+.lossless-resource-card:focus-visible .lossless-resource-preview,
+.lossless-resource-card.is-selected .lossless-resource-preview {
+  border-color: var(--color-primary);
+}
+
+.lossless-resource-card > strong,
+.lossless-resource-card > small {
+  min-width: 0;
+  margin: 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-resource-card > strong {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.lossless-resource-card > small {
+  color: var(--text-color-secend);
+  font-size: 10px;
+  line-height: 13px;
+}
+
+.lossless-resource-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--text-color-secend);
+  background: var(--bg-color-light);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.lossless-resource-preview > img,
+.lossless-resource-preview > video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--bg-color-light);
+  pointer-events: none;
+}
+
+.lossless-resource-audio-preview {
+  width: 100%;
+  height: 100%;
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 15%, var(--bg-color-light));
+  display: grid;
+  place-items: center;
+}
+
+.lossless-resource-used-badge,
+.lossless-resource-preview > time {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  min-height: 17px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 10px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-resource-used-badge {
+  left: 4px;
+  color: #ffffff;
+  background: color-mix(in srgb, var(--color-primary) 88%, #000000);
+}
+
+.lossless-resource-preview > time {
+  right: 4px;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.lossless-resource-card-actions {
+  position: absolute;
+  z-index: 3;
+  right: 4px;
+  bottom: 4px;
+  display: inline-flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.lossless-resource-card:hover .lossless-resource-card-actions,
+.lossless-resource-card:focus-within .lossless-resource-card-actions,
+.lossless-resource-card.is-selected .lossless-resource-card-actions {
+  opacity: 1;
+}
+
+.lossless-resource-card-actions > button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(0, 0, 0, 0.68);
+  display: grid;
+  place-items: center;
+}
+
+.lossless-resource-empty {
+  min-height: 150px;
+  border: 1px dashed var(--border-color);
+  border-radius: 2px;
+  color: var(--text-color-secend);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  font-size: 12px;
+  pointer-events: none;
+}
+
 .lossless-selected-track {
   min-width: 0;
   min-height: 46px;
@@ -6145,6 +6333,10 @@ input {
   grid-template-columns: minmax(0, 1fr) 66px 28px;
   align-items: center;
   gap: 6px;
+}
+
+.lossless-selected-track.is-video {
+  grid-template-columns: minmax(0, 1fr) 28px;
 }
 
 .lossless-selected-track > div {

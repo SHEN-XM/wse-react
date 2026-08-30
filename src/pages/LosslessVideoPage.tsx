@@ -34,7 +34,7 @@ import {
   ZoomIn,
   XCircle
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   cancelVideoTask,
   createVideoTaskId,
@@ -51,6 +51,7 @@ import {
   type DialogueStrength,
   type DuplicateSegment,
   type ExportMediaTrack,
+  type ExportVideoClip,
   type LosslessCutMode,
   type MediaKeyframe,
   type VideoInput
@@ -73,6 +74,7 @@ type SegmentFilter = "settings" | "repeat" | "transition";
 
 type EditorTrackBase = {
   id: string;
+  sourceId: string;
   laneId: string;
   name: string;
   file: File;
@@ -105,15 +107,62 @@ type ImageEditorTrack = EditorTrackBase & {
 type EditorTrack = AudioEditorTrack | ImageEditorTrack;
 type ImageEasing = NonNullable<MediaKeyframe["easing"]>;
 
+type VideoEditorSource = {
+  id: string;
+  type: "video";
+  name: string;
+  file: File;
+  previewUrl: string;
+  thumbnailUrl?: string;
+  duration: number;
+  width: number;
+  height: number;
+  primary: boolean;
+};
+
+type ImportedAudioResource = {
+  id: string;
+  type: "audio";
+  name: string;
+  file: File;
+  previewUrl: string;
+  duration: number;
+};
+
+type ImportedImageResource = {
+  id: string;
+  type: "image";
+  name: string;
+  file: File;
+  previewUrl: string;
+  width: number;
+  height: number;
+};
+
+type ImportedMediaResource = ImportedAudioResource | ImportedImageResource;
+type ImportedResource = VideoEditorSource | ImportedMediaResource;
+
+type VideoEditorClip = {
+  id: string;
+  sourceId: string;
+  laneId: string;
+  name: string;
+  start: number;
+  end: number;
+  sourceStart: number;
+  sourceEnd: number;
+};
+
 type TimelineLane = {
   id: string;
-  type: EditorTrack["type"];
+  type: "video" | EditorTrack["type"];
   clips: EditorTrack[];
+  videoClips: VideoEditorClip[];
 };
 
 type PendingEditorMedia =
-  | { type: "audio"; file: File; previewUrl: string; sourceDuration: number }
-  | { type: "image"; file: File; previewUrl: string; sourceWidth: number; sourceHeight: number };
+  | { type: "audio"; sourceId: string; file: File; previewUrl: string; sourceDuration: number }
+  | { type: "image"; sourceId: string; file: File; previewUrl: string; sourceWidth: number; sourceHeight: number };
 
 type PreviewSize = {
   width: number;
@@ -166,9 +215,12 @@ const audioSettingsVersion = 2;
 const dialogueModeMigrationKey = "wse.losslessVideo.tigerDialogue.v1";
 const timelineFps = 60;
 const timelineEdgeSpacePx = 7;
+const timelineMinZoom = 0.25;
+const timelineMinZoomExponent = Math.log2(timelineMinZoom);
 const timelineMaxFrameWidthPx = 48;
 const timelineMaxCanvasWidthPx = 16_000_000;
 const timelineAbsoluteMaxZoom = 16_384;
+const resourceDragMime = "application/x-wse-video-resource";
 const playbackRateOptions = [
   { label: "0.5x", value: 0.5 },
   { label: "0.75x", value: 0.75 },
@@ -311,14 +363,6 @@ function formatTimelineTimecode(value: number, fps: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}:${String(frames).padStart(2, "0")}`;
 }
 
-function formatFileSize(size?: number) {
-  if (!size) return "-";
-  if (size >= 1024 * 1024 * 1024) return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
-  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${size} B`;
-}
-
 function clampPercent(value: number) {
   return Math.min(100, Math.max(0, value));
 }
@@ -327,12 +371,59 @@ function clampValue(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function pickTimelineMajorFrameCount(targetFrames: number) {
-  const safeTarget = Math.max(5, Number.isFinite(targetFrames) ? targetFrames : 5);
-  const magnitude = 10 ** Math.floor(Math.log10(safeTarget));
-  const normalized = safeTarget / magnitude;
-  const coefficient = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 3 ? 3 : normalized <= 5 ? 5 : 10;
-  return Math.max(5, coefficient * magnitude);
+function pickTimelineMajorStep(targetSeconds: number, fps: number) {
+  const safeFps = Math.max(1, Math.round(fps));
+  const candidates = [
+    1 / safeFps,
+    2 / safeFps,
+    5 / safeFps,
+    10 / safeFps,
+    15 / safeFps,
+    30 / safeFps,
+    1,
+    2,
+    3,
+    5,
+    10,
+    15,
+    30,
+    60,
+    120,
+    180,
+    300,
+    600,
+    1800,
+    3600,
+    7200,
+    10800,
+    21600,
+    43200,
+    86400
+  ];
+  const safeTarget = Math.max(1 / safeFps, Number.isFinite(targetSeconds) ? targetSeconds : 1);
+  const matched = candidates.find((candidate) => candidate >= safeTarget - 0.000001);
+  if (matched) return matched;
+  return Math.ceil(safeTarget / 86400) * 86400;
+}
+
+function pickTimelineSubdivisionCount(majorStep: number, fps: number) {
+  const frameCount = Math.max(1, Math.round(majorStep * Math.max(1, fps)));
+  if (frameCount < 5) return frameCount;
+  return frameCount % 10 === 0 ? 10 : 5;
+}
+
+function formatTimelineRulerLabel(value: number, majorStep: number, fps: number) {
+  if (majorStep < 1) return formatTimelineTimecode(value, fps);
+  const totalSeconds = Math.max(0, Math.round(value));
+  if (totalSeconds === 0) return "00:00";
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    return `${String(totalMinutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function calculateImageHeightPercent(width: number, sourceWidth: number, sourceHeight: number, videoAspectRatio: number) {
@@ -368,7 +459,7 @@ function getTrackLaneId(track: EditorTrack) {
   return track.laneId || track.id;
 }
 
-function findAvailableClipStart(clips: EditorTrack[], preferredStart: number, clipDuration: number, timelineEnd: number) {
+function findAvailableClipStart(clips: Array<{ start: number; end: number }>, preferredStart: number, clipDuration: number, timelineEnd: number) {
   const maxStart = Number.isFinite(timelineEnd) ? Math.max(0, timelineEnd - clipDuration) : Number.POSITIVE_INFINITY;
   let cursor = clampValue(preferredStart, 0, maxStart);
   const sorted = [...clips].sort((left, right) => left.start - right.start);
@@ -393,6 +484,97 @@ function getLaneClipBounds(tracks: EditorTrack[], track: EditorTrack, timelineEn
   });
 
   return { minimumStart, maximumEnd };
+}
+
+function getVideoProjectDuration(clips: VideoEditorClip[]) {
+  return clips.reduce((maximum, clip) => Math.max(maximum, clip.end), 0);
+}
+
+function getTimelineProjectDuration(videoClips: VideoEditorClip[], tracks: EditorTrack[]) {
+  return Math.max(
+    getVideoProjectDuration(videoClips),
+    tracks.reduce((maximum, track) => Math.max(maximum, track.end), 0)
+  );
+}
+
+function mergeTimelineLaneOrder(current: string[], videoClips: VideoEditorClip[], tracks: EditorTrack[]) {
+  const available = new Set([
+    ...videoClips.map((clip) => clip.laneId),
+    ...tracks.map(getTrackLaneId)
+  ]);
+  const next = current.filter((laneId) => available.has(laneId));
+  available.forEach((laneId) => {
+    if (!next.includes(laneId)) next.push(laneId);
+  });
+  return next;
+}
+
+function findVideoClipAtTime(clips: VideoEditorClip[], time: number, laneOrder: string[] = []) {
+  const safeTime = Math.max(0, time);
+  const lanePosition = new Map(laneOrder.map((laneId, index) => [laneId, index]));
+  return clips
+    .filter((clip) => safeTime >= clip.start - 0.0005 && safeTime < clip.end - 0.0005)
+    .sort((left, right) => (lanePosition.get(left.laneId) ?? Number.MAX_SAFE_INTEGER) - (lanePosition.get(right.laneId) ?? Number.MAX_SAFE_INTEGER))[0];
+}
+
+function isVideoTimelineEdited(clips: VideoEditorClip[], sources: VideoEditorSource[], primaryDuration: number) {
+  if (!clips.length) return true;
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  if (clips.some((clip) => sourceById.get(clip.sourceId)?.primary === false)) return true;
+  const primarySource = sources.find((source) => source.primary);
+  if (!primarySource || primaryDuration <= 0) return false;
+  const sorted = [...clips].sort((left, right) => left.start - right.start);
+  let timelineCursor = 0;
+  let sourceCursor = 0;
+  for (const clip of sorted) {
+    if (clip.sourceId !== primarySource.id) return true;
+    if (Math.abs(clip.start - timelineCursor) > 0.03 || Math.abs(clip.sourceStart - sourceCursor) > 0.03) return true;
+    const timelineLength = clip.end - clip.start;
+    const sourceLength = clip.sourceEnd - clip.sourceStart;
+    if (Math.abs(timelineLength - sourceLength) > 0.03) return true;
+    timelineCursor = clip.end;
+    sourceCursor = clip.sourceEnd;
+  }
+  return Math.abs(timelineCursor - primaryDuration) > 0.03 || Math.abs(sourceCursor - primaryDuration) > 0.03;
+}
+
+function videoTimelineNeedsComposition(clips: VideoEditorClip[]) {
+  if (!clips.length) return false;
+  const laneId = clips[0].laneId;
+  const sorted = [...clips].sort((left, right) => left.start - right.start);
+  let cursor = 0;
+  for (const clip of sorted) {
+    if (clip.laneId !== laneId || Math.abs(clip.start - cursor) > 0.03) return true;
+    cursor = clip.end;
+  }
+  return false;
+}
+
+function mapPrimarySourceRangeToProject(
+  clips: VideoEditorClip[],
+  sources: VideoEditorSource[],
+  sourceStart: number,
+  sourceEnd: number
+) {
+  const primarySourceIds = new Set(sources.filter((source) => source.primary).map((source) => source.id));
+  const primaryClips = clips
+    .filter((clip) => primarySourceIds.has(clip.sourceId))
+    .sort((left, right) => left.sourceStart - right.sourceStart);
+  let sourceCursor = sourceStart;
+  let projectStart: number | undefined;
+  let projectEnd: number | undefined;
+  while (sourceCursor < sourceEnd - 0.0005) {
+    const clip = primaryClips.find((item) => sourceCursor >= item.sourceStart - 0.0005 && sourceCursor < item.sourceEnd - 0.0005);
+    if (!clip) return undefined;
+    const partProjectStart = clip.start + sourceCursor - clip.sourceStart;
+    if (projectStart === undefined) projectStart = partProjectStart;
+    if (projectEnd !== undefined && Math.abs(partProjectStart - projectEnd) > 0.03) return undefined;
+    const partSourceEnd = Math.min(sourceEnd, clip.sourceEnd);
+    projectEnd = clip.start + partSourceEnd - clip.sourceStart;
+    sourceCursor = partSourceEnd;
+  }
+  if (projectStart === undefined || projectEnd === undefined || projectEnd-projectStart <= 0.001) return undefined;
+  return { start: projectStart, end: projectEnd };
 }
 
 function interpolateImageKeyframe(track: ImageEditorTrack, time: number): MediaKeyframe {
@@ -503,6 +685,10 @@ function createInputFromFile(file: File): VideoInput {
   };
 }
 
+function mediaFileIdentity(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
 function isVideoFile(file: File) {
   return file.type.startsWith("video/") || /\.(mp4|mov|m4v|mkv|webm)$/i.test(file.name);
 }
@@ -527,6 +713,69 @@ function readAudioDuration(url: string) {
     audio.onloadedmetadata = () => finish(Number.isFinite(audio.duration) ? audio.duration : 0);
     audio.onerror = () => finish(0);
     audio.src = url;
+  });
+}
+
+function readVideoMetadata(url: string) {
+  return new Promise<{ duration: number; width: number; height: number }>((resolve) => {
+    const video = document.createElement("video");
+    const finish = (value: { duration: number; width: number; height: number }) => {
+      video.removeAttribute("src");
+      video.load();
+      resolve(value);
+    };
+    video.preload = "metadata";
+    video.onloadedmetadata = () => finish({
+      duration: Number.isFinite(video.duration) ? video.duration : 0,
+      width: video.videoWidth || 16,
+      height: video.videoHeight || 9
+    });
+    video.onerror = () => finish({ duration: 0, width: 16, height: 9 });
+    video.src = url;
+  });
+}
+
+function createVideoThumbnail(url: string, duration: number) {
+  return new Promise<string>((resolve) => {
+    const video = document.createElement("video");
+    let settled = false;
+    const timeoutId = window.setTimeout(() => finish(""), 8000);
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      video.removeAttribute("src");
+      video.load();
+      resolve(value);
+    };
+    const capture = () => {
+      const sourceWidth = video.videoWidth || 16;
+      const sourceHeight = video.videoHeight || 9;
+      const scale = Math.min(1, 240 / Math.max(sourceWidth, sourceHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      try {
+        canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL("image/jpeg", 0.76));
+      } catch {
+        finish("");
+      }
+    };
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    video.onerror = () => finish("");
+    video.onloadeddata = () => {
+      const sampleTime = duration > 0.2 ? Math.min(0.5, duration * 0.08) : 0;
+      if (sampleTime <= 0.01) {
+        capture();
+        return;
+      }
+      video.onseeked = capture;
+      video.currentTime = sampleTime;
+    };
+    video.src = url;
   });
 }
 
@@ -561,10 +810,7 @@ function normalizeSegment(segment: DuplicateSegment, index: number): DuplicateSe
 
 export default function LosslessVideoPage() {
   const storedSettingsRef = useRef(loadStoredSettings());
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const videoPickerCooldownUntilRef = useRef(0);
-  const audioInputRef = useRef<HTMLInputElement | null>(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const resourceInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
@@ -573,6 +819,13 @@ export default function LosslessVideoPage() {
   const imageOverlayRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const imageMotionPathRef = useRef<SVGPolylineElement | null>(null);
   const tracksRef = useRef<EditorTrack[]>([]);
+  const videoSourcesRef = useRef<VideoEditorSource[]>([]);
+  const videoClipsRef = useRef<VideoEditorClip[]>([]);
+  const timelineLaneOrderRef = useRef<string[]>([]);
+  const mediaResourcesRef = useRef<ImportedMediaResource[]>([]);
+  const activeVideoClipIdRef = useRef("");
+  const pendingVideoSeekRef = useRef<{ time: number; shouldPlay: boolean } | null>(null);
+  const playbackAnchorRef = useRef({ time: 0, startedAt: 0 });
   const abortRef = useRef<AbortController | null>(null);
   const selectionUndoRef = useRef<boolean[][]>([]);
   const selectionRedoRef = useRef<boolean[][]>([]);
@@ -581,8 +834,15 @@ export default function LosslessVideoPage() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoInput, setVideoInput] = useState<VideoInput | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [videoSources, setVideoSources] = useState<VideoEditorSource[]>([]);
+  const [videoClips, setVideoClips] = useState<VideoEditorClip[]>([]);
+  const [mediaResources, setMediaResources] = useState<ImportedMediaResource[]>([]);
+  const [selectedResourceId, setSelectedResourceId] = useState("");
+  const [activeVideoClipId, setActiveVideoClipId] = useState("");
+  const [selectedVideoClipId, setSelectedVideoClipId] = useState("");
+  const [timelineLaneOrder, setTimelineLaneOrder] = useState<string[]>([]);
   const [duration, setDuration] = useState(0);
-  const [videoSize, setVideoSize] = useState<PreviewSize>({ width: 16, height: 9 });
+  const [videoSize, setVideoSize] = useState<PreviewSize>({ width: 1920, height: 1080 });
   const [previewSize, setPreviewSize] = useState<PreviewSize>({ width: 0, height: 0 });
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -594,7 +854,7 @@ export default function LosslessVideoPage() {
   const [selectedTrackId, setSelectedTrackId] = useState("");
   const [selectedLaneId, setSelectedLaneId] = useState("");
   const [selectedKeyframeId, setSelectedKeyframeId] = useState("");
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("detect");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("tracks");
   const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>("settings");
   const [, setHistoryVersion] = useState(0);
   const [params, setParams] = useState<DetectParams>(storedSettingsRef.current.params);
@@ -607,7 +867,8 @@ export default function LosslessVideoPage() {
   const [segments, setSegments] = useState<DuplicateSegment[]>([]);
   const [taskId, setTaskId] = useState<string>();
   const [error, setError] = useState("");
-  const [dragging, setDragging] = useState(false);
+  const [resourceDropActive, setResourceDropActive] = useState(false);
+  const [timelineDropActive, setTimelineDropActive] = useState(false);
   const [stepStartedAt, setStepStartedAt] = useState(0);
   const [stepFinishedAt, setStepFinishedAt] = useState(0);
   const [clockNow, setClockNow] = useState(Date.now());
@@ -636,20 +897,37 @@ export default function LosslessVideoPage() {
     }
   };
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      abortRef.current?.abort();
-    };
-  }, [previewUrl]);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
     tracksRef.current = tracks;
   }, [tracks]);
 
   useEffect(() => {
+    videoSourcesRef.current = videoSources;
+  }, [videoSources]);
+
+  useEffect(() => {
+    videoClipsRef.current = videoClips;
+  }, [videoClips]);
+
+  useEffect(() => {
+    timelineLaneOrderRef.current = timelineLaneOrder;
+  }, [timelineLaneOrder]);
+
+  useEffect(() => {
+    mediaResourcesRef.current = mediaResources;
+  }, [mediaResources]);
+
+  useEffect(() => {
+    activeVideoClipIdRef.current = activeVideoClipId;
+  }, [activeVideoClipId]);
+
+  useEffect(() => {
     return () => {
       tracksRef.current.forEach((track) => URL.revokeObjectURL(track.previewUrl));
+      videoSourcesRef.current.forEach((source) => URL.revokeObjectURL(source.previewUrl));
+      mediaResourcesRef.current.forEach((resource) => URL.revokeObjectURL(resource.previewUrl));
       audioPreviewRefs.current.forEach((audio) => audio.pause());
     };
   }, []);
@@ -739,6 +1017,37 @@ export default function LosslessVideoPage() {
     [removableSegments]
   );
   const enabledTracks = useMemo(() => tracks.filter((track) => track.enabled), [tracks]);
+  const importedResources = useMemo<ImportedResource[]>(() => [...videoSources, ...mediaResources], [mediaResources, videoSources]);
+  const usedVideoSourceIds = useMemo(() => new Set(videoClips.map((clip) => clip.sourceId)), [videoClips]);
+  const usedMediaSourceIds = useMemo(() => new Set(tracks.map((track) => track.sourceId)), [tracks]);
+  const projectVideoDuration = useMemo(() => getTimelineProjectDuration(videoClips, tracks), [tracks, videoClips]);
+  const activeVideoClip = useMemo(() => {
+    const selected = videoClips.find((clip) => clip.id === activeVideoClipId);
+    if (selected && currentTime >= selected.start - 0.0005 && currentTime < selected.end - 0.0005) return selected;
+    return findVideoClipAtTime(videoClips, currentTime, timelineLaneOrder);
+  }, [activeVideoClipId, currentTime, timelineLaneOrder, videoClips]);
+  const activeVideoSource = useMemo(
+    () => videoSources.find((source) => source.id === activeVideoClip?.sourceId) || videoSources.find((source) => source.primary),
+    [activeVideoClip?.sourceId, videoSources]
+  );
+  const selectedVideoClip = useMemo(
+    () => videoClips.find((clip) => clip.id === selectedVideoClipId),
+    [selectedVideoClipId, videoClips]
+  );
+  const canSplitSelectedVideoClip = Boolean(
+    selectedVideoClip
+      && currentTime > selectedVideoClip.start + 1 / timelineFps
+      && currentTime < selectedVideoClip.end - 1 / timelineFps
+  );
+  const hasVideoEdits = useMemo(
+    () => isVideoTimelineEdited(videoClips, videoSources, duration),
+    [duration, videoClips, videoSources]
+  );
+  const needsVideoComposition = useMemo(() => videoTimelineNeedsComposition(videoClips), [videoClips]);
+  const hasExternalVideoSources = useMemo(
+    () => videoSources.some((source) => !source.primary && usedVideoSourceIds.has(source.id)),
+    [usedVideoSourceIds, videoSources]
+  );
   const hasImageTracks = useMemo(() => enabledTracks.some((track) => track.type === "image"), [enabledTracks]);
   const selectedTrack = useMemo(() => tracks.find((track) => track.id === selectedTrackId), [selectedTrackId, tracks]);
   const selectedImageTrack = selectedTrack?.type === "image" ? selectedTrack : undefined;
@@ -765,17 +1074,37 @@ export default function LosslessVideoPage() {
   }, [currentTime, sortedSelectedKeyframes, timelineFps]);
   const timelineLanes = useMemo(() => {
     const lanes = new Map<string, TimelineLane>();
+    videoClips.forEach((clip) => {
+      const lane = lanes.get(clip.laneId);
+      if (lane) lane.videoClips.push(clip);
+      else lanes.set(clip.laneId, { id: clip.laneId, type: "video", clips: [], videoClips: [clip] });
+    });
     tracks.forEach((track) => {
       const laneId = track.laneId || track.id;
       const lane = lanes.get(laneId);
       if (lane) lane.clips.push(track);
-      else lanes.set(laneId, { id: laneId, type: track.type, clips: [track] });
+      else lanes.set(laneId, { id: laneId, type: track.type, clips: [track], videoClips: [] });
     });
-    return Array.from(lanes.values()).map((lane) => ({
+    const laneIds = [
+      ...timelineLaneOrder.filter((laneId) => lanes.has(laneId)),
+      ...Array.from(lanes.keys()).filter((laneId) => !timelineLaneOrder.includes(laneId))
+    ];
+    return laneIds.map((laneId) => lanes.get(laneId)!).map((lane) => ({
       ...lane,
-      clips: [...lane.clips].sort((left, right) => left.start - right.start)
+      clips: [...lane.clips].sort((left, right) => left.start - right.start),
+      videoClips: [...lane.videoClips].sort((left, right) => left.start - right.start)
     }));
-  }, [tracks]);
+  }, [timelineLaneOrder, tracks, videoClips]);
+  const timelineLayerByLane = useMemo(
+    () => new Map(timelineLanes.map((lane, index) => [lane.id, index])),
+    [timelineLanes]
+  );
+  const activeVideoLayer = activeVideoClip
+    ? timelineLayerByLane.get(activeVideoClip.laneId) ?? Number.POSITIVE_INFINITY
+    : Number.POSITIVE_INFINITY;
+  const selectedImageVisible = selectedImageTrack
+    ? (timelineLayerByLane.get(getTrackLaneId(selectedImageTrack)) ?? Number.POSITIVE_INFINITY) < activeVideoLayer
+    : false;
   const filteredSegments = useMemo(
     () =>
       segments
@@ -798,16 +1127,18 @@ export default function LosslessVideoPage() {
   const timelineDuration = useMemo(
     () =>
       Math.max(
-        duration,
+        projectVideoDuration,
         ...segments.map((segment) => Math.max(segment.deleteEnd ?? segment.secondEnd, segment.secondEnd, segment.firstEnd)),
         ...tracks.map((track) => track.end),
         10
       ),
-    [duration, segments, tracks]
+    [projectVideoDuration, segments, tracks]
   );
+  const timelineDisplayDuration = timelineDuration / Math.min(1, timelineZoom);
+  const timelineCanvasZoom = Math.max(1, timelineZoom);
   const selectedTrackLaneBounds = useMemo(
-    () => selectedTrack ? getLaneClipBounds(tracks, selectedTrack, duration || timelineDuration) : undefined,
-    [duration, selectedTrack, timelineDuration, tracks]
+    () => selectedTrack ? getLaneClipBounds(tracks, selectedTrack, timelineDisplayDuration) : undefined,
+    [selectedTrack, timelineDisplayDuration, tracks]
   );
   const timelineMaxZoom = useMemo(() => {
     const viewportWidth = Math.max(1, timelineViewport.width || 1000);
@@ -820,53 +1151,53 @@ export default function LosslessVideoPage() {
   const timelineMaxZoomExponent = Math.log2(timelineMaxZoom);
   const timelineScale = useMemo(() => {
     const viewportWidth = Math.max(1, timelineViewport.width || 1000);
-    const canvasWidth = Math.max(1, viewportWidth * timelineZoom - timelineEdgeSpacePx * 2);
-    const pixelsPerSecond = canvasWidth / Math.max(0.001, timelineDuration);
+    const canvasWidth = Math.max(1, viewportWidth * timelineCanvasZoom - timelineEdgeSpacePx * 2);
+    const pixelsPerSecond = canvasWidth / Math.max(0.001, timelineDisplayDuration);
     const frameStep = 1 / timelineFps;
-    const pixelsPerFrame = pixelsPerSecond / timelineFps;
-    const majorFrameCount = pickTimelineMajorFrameCount(96 / Math.max(0.000001, pixelsPerFrame));
-    const subdivisionCount = majorFrameCount === 5 ? 5 : 10;
-    const minorFrameCount = Math.max(1, majorFrameCount / subdivisionCount);
-    const minorStep = minorFrameCount / timelineFps;
+    const majorStep = pickTimelineMajorStep(110 / Math.max(0.000001, pixelsPerSecond), timelineFps);
+    const subdivisionCount = pickTimelineSubdivisionCount(majorStep, timelineFps);
+    const minorStep = majorStep / subdivisionCount;
     const buffer = viewportWidth * 0.5;
-    const visibleStart = clampValue(((timelineViewport.scrollLeft - timelineEdgeSpacePx - buffer) / canvasWidth) * timelineDuration, 0, timelineDuration);
-    const visibleEnd = clampValue(((timelineViewport.scrollLeft + viewportWidth - timelineEdgeSpacePx + buffer) / canvasWidth) * timelineDuration, 0, timelineDuration);
+    const visibleStart = clampValue(((timelineViewport.scrollLeft - timelineEdgeSpacePx - buffer) / canvasWidth) * timelineDisplayDuration, 0, timelineDisplayDuration);
+    const visibleEnd = clampValue(((timelineViewport.scrollLeft + viewportWidth - timelineEdgeSpacePx + buffer) / canvasWidth) * timelineDisplayDuration, 0, timelineDisplayDuration);
     const firstIndex = Math.max(0, Math.floor(visibleStart / minorStep));
     const lastIndex = Math.max(firstIndex, Math.ceil(visibleEnd / minorStep));
     const ticks: TimelineTick[] = [];
     const renderedLastIndex = Math.min(lastIndex, firstIndex + 2400);
     for (let index = firstIndex; index <= renderedLastIndex; index += 1) {
-      const frame = index * minorFrameCount;
-      const frameWithinMajor = frame % majorFrameCount;
-      const time = Math.min(timelineDuration, frame / timelineFps);
-      const kind = frameWithinMajor === 0
+      const subdivisionIndex = index % subdivisionCount;
+      const time = Math.min(timelineDisplayDuration, index * minorStep);
+      const kind = subdivisionIndex === 0
         ? "major"
-        : subdivisionCount === 10 && frameWithinMajor === majorFrameCount / 2
+        : subdivisionCount === 10 && subdivisionIndex === 5
           ? "medium"
-          : minorFrameCount === 1
+          : minorStep <= frameStep + 0.000001
             ? "frame"
             : "minor";
-      ticks.push({ index, kind, time, percent: (time / timelineDuration) * 100 });
+      ticks.push({ index, kind, time, percent: (time / timelineDisplayDuration) * 100 });
     }
-    return { ticks, frameStep };
-  }, [timelineDuration, timelineFps, timelineViewport, timelineZoom]);
+    return { ticks, frameStep, majorStep };
+  }, [timelineCanvasZoom, timelineDisplayDuration, timelineFps, timelineViewport]);
   const timelineTicks = timelineScale.ticks;
 
   useEffect(() => {
     setTimelineZoom((current) => Math.min(current, timelineMaxZoom));
   }, [timelineMaxZoom]);
 
-  const canRunTask = Boolean(videoInput) && status !== "detecting" && status !== "exporting";
+  const canRunTask = Boolean(videoInput) && videoClips.length > 0 && status !== "detecting" && status !== "exporting";
   const videoOutputReencoded = hasImageTracks
+    || hasExternalVideoSources
+    || needsVideoComposition
+    || videoClips.length === 0
     || mode === "precise-reencode"
-    || (mode === "hybrid" && keyframeWarnings > 0);
+    || (mode === "hybrid" && (keyframeWarnings > 0 || hasVideoEdits));
   const canUseAudioSeparation = !audioSeparation.enabled
     || (!audioSeparationStatusLoading && audioSeparationStatus?.available === true);
-  const canExport = Boolean(videoFile)
+  const canExport = projectVideoDuration > 0
     && status !== "detecting"
     && status !== "exporting"
     && canUseAudioSeparation
-    && (removableSegments.length > 0 || enabledTracks.length > 0 || audioSeparation.enabled);
+    && (videoClips.length > 0 || enabledTracks.length > 0);
   const stepElapsed = stepStartedAt ? formatElapsed((stepFinishedAt || clockNow) - stepStartedAt) : "";
   const showStepElapsed = Boolean(stepElapsed) && status !== "idle";
   const canUndoSelection = selectionUndoRef.current.length > 0;
@@ -906,28 +1237,32 @@ export default function LosslessVideoPage() {
     let lastReactUpdate = Number.NEGATIVE_INFINITY;
 
     const paintFrame = (mediaTime: number, now: number) => {
+      const clip = videoClipsRef.current.find((item) => item.id === activeVideoClipIdRef.current);
+      const projectTime = clip
+        ? clampValue(clip.start + mediaTime - clip.sourceStart, clip.start, clip.end)
+        : mediaTime;
       tracksRef.current.forEach((track) => {
         if (track.type !== "image") return;
         const element = imageOverlayRefs.current.get(track.id);
         if (!element) return;
-        const active = track.enabled && mediaTime >= track.start && mediaTime <= track.end;
+        const active = track.enabled && projectTime >= track.start && projectTime <= track.end;
         const visibility = active ? "visible" : "hidden";
         const pointerEvents = active ? "auto" : "none";
         if (element.style.visibility !== visibility) element.style.visibility = visibility;
         if (element.style.pointerEvents !== pointerEvents) element.style.pointerEvents = pointerEvents;
-        if (active) paintImageTransform(element, interpolateImageKeyframe(track, mediaTime), track);
+        if (active) paintImageTransform(element, interpolateImageKeyframe(track, projectTime), track);
       });
 
       const playhead = timelinePlayheadRef.current;
       if (playhead) {
-        const playheadPercent = Math.min(mediaTime, timelineDuration) / Math.max(0.001, timelineDuration) * 100;
+        const playheadPercent = Math.min(projectTime, timelineDisplayDuration) / Math.max(0.001, timelineDisplayDuration) * 100;
         const left = `${playheadPercent.toFixed(5)}%`;
         if (playhead.style.left !== left) playhead.style.left = left;
       }
 
       if (now - lastReactUpdate >= 100) {
         lastReactUpdate = now;
-        setCurrentTime((previous) => Math.abs(previous - mediaTime) > 0.001 ? mediaTime : previous);
+        setCurrentTime((previous) => Math.abs(previous - projectTime) > 0.001 ? projectTime : previous);
       }
     };
 
@@ -958,7 +1293,7 @@ export default function LosslessVideoPage() {
       if (videoFrameHandle) video.cancelVideoFrameCallback?.(videoFrameHandle);
       if (animationFrameHandle) window.cancelAnimationFrame(animationFrameHandle);
     };
-  }, [previewUrl, timelineDuration]);
+  }, [activeVideoClipId, previewUrl, timelineDisplayDuration]);
 
   const setNumberParam = (key: keyof DetectParams, value: number) => {
     setParams((prev) => ({ ...prev, [key]: value }));
@@ -976,53 +1311,116 @@ export default function LosslessVideoPage() {
     setStatus("idle");
   };
 
-  const acceptFile = (file: File) => {
-    if (status === "detecting" || status === "exporting") return;
-    if (!isVideoFile(file)) {
-      notify({ type: "warning", title: "请选择视频文件", message: file.name });
+  const pickResourceFiles = () => resourceInputRef.current?.click();
+
+  const acceptVideoTracks = async (files: File[]) => {
+    const existingFiles = new Set([
+      ...videoSourcesRef.current.map((source) => mediaFileIdentity(source.file)),
+      ...mediaResourcesRef.current.map((resource) => mediaFileIdentity(resource.file))
+    ]);
+    const validFiles = files.filter((file) => isVideoFile(file) && !existingFiles.has(mediaFileIdentity(file)));
+    if (!validFiles.length) {
+      notify({ type: "warning", title: "没有可导入的新视频" });
       return;
     }
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    tracks.forEach((track) => URL.revokeObjectURL(track.previewUrl));
-    audioPreviewRefs.current.forEach((audio) => audio.pause());
-    audioPreviewRefs.current.clear();
-    setTracks([]);
+    const loadedSources = await Promise.all(validFiles.map(async (file) => {
+      const sourcePreviewUrl = URL.createObjectURL(file);
+      const metadata = await readVideoMetadata(sourcePreviewUrl);
+      const thumbnailUrl = await createVideoThumbnail(sourcePreviewUrl, metadata.duration);
+      return {
+        id: createEditorId("video-source"),
+        type: "video",
+        name: file.name,
+        file,
+        previewUrl: sourcePreviewUrl,
+        thumbnailUrl,
+        duration: metadata.duration,
+        width: metadata.width,
+        height: metadata.height,
+        primary: false
+      } satisfies VideoEditorSource;
+    }));
+    const usableSources = loadedSources.filter((source) => {
+      if (source.duration > 0.05) return true;
+      URL.revokeObjectURL(source.previewUrl);
+      notify({ type: "warning", title: "无法读取视频素材", message: source.name });
+      return false;
+    });
+    if (!usableSources.length) return;
+    const nextSources = [...videoSourcesRef.current, ...usableSources];
+    videoSourcesRef.current = nextSources;
+    setVideoSources(nextSources);
+    setSelectedResourceId(usableSources[usableSources.length - 1].id);
+    setInspectorTab("tracks");
+    notify({ type: "success", title: "视频已导入", message: `${usableSources.length} 个资源` });
+  };
+
+  const splitSelectedVideoClip = () => {
+    const clip = videoClipsRef.current.find((item) => item.id === selectedVideoClipId)
+      || findVideoClipAtTime(videoClipsRef.current, currentTime);
+    if (!clip) {
+      notify({ type: "warning", title: "请先选择视频片段" });
+      return;
+    }
+    const splitTime = Math.round(clampValue(currentTime, clip.start, clip.end) * timelineFps) / timelineFps;
+    if (splitTime <= clip.start + 1 / timelineFps || splitTime >= clip.end - 1 / timelineFps) {
+      notify({ type: "warning", title: "播放头需要位于片段内部" });
+      return;
+    }
+    const sourceSplitTime = clip.sourceStart + splitTime - clip.start;
+    const rightClip: VideoEditorClip = {
+      ...clip,
+      id: createEditorId("video-clip"),
+      start: splitTime,
+      sourceStart: sourceSplitTime
+    };
+    const nextClips = videoClipsRef.current
+      .flatMap((item) => item.id === clip.id ? [{ ...item, end: splitTime, sourceEnd: sourceSplitTime }, rightClip] : [item])
+      .sort((left, right) => left.start - right.start);
+    videoClipsRef.current = nextClips;
+    setVideoClips(nextClips);
+    setSelectedVideoClipId(rightClip.id);
     setSelectedTrackId("");
-    setSelectedLaneId("");
+    setSelectedLaneId(clip.laneId);
+    notify({ type: "success", title: "已在播放头处分割" });
+  };
+
+  const removeVideoClip = (clipId: string) => {
+    const clip = videoClipsRef.current.find((item) => item.id === clipId);
+    if (!clip) return;
+    const nextClips = videoClipsRef.current
+      .filter((item) => item.id !== clip.id)
+      .sort((left, right) => left.start - right.start);
+    videoClipsRef.current = nextClips;
+    setVideoClips(nextClips);
+    setTimelineLaneOrder((current) => mergeTimelineLaneOrder(current, nextClips, tracksRef.current));
+    setSelectedVideoClipId("");
     setSelectedKeyframeId("");
-    setVideoFile(file);
-    setVideoInput(createInputFromFile(file));
-    setPreviewUrl(URL.createObjectURL(file));
-    setDuration(0);
-    setCurrentTime(0);
-    setIsPlaying(false);
-    setTimelineZoom(1);
+    if (activeVideoClipIdRef.current === clip.id) {
+      videoRef.current?.pause();
+      activeVideoClipIdRef.current = "";
+      setActiveVideoClipId("");
+    }
     resetResult();
+    seekPreview(Math.min(currentTime, getTimelineProjectDuration(nextClips, tracksRef.current)), false);
+    notify({ type: "success", title: "已删除视频片段", message: "时间轴位置保持不变" });
   };
 
-  const pickVideo = () => {
-    const input = fileInputRef.current;
-    const now = performance.now();
-    if (!input || now < videoPickerCooldownUntilRef.current) return;
-    videoPickerCooldownUntilRef.current = now + 1000;
-    input.click();
-  };
-
-  const pickAudioTrack = () => audioInputRef.current?.click();
-
-  const pickImageTrack = () => imageInputRef.current?.click();
-
-  const appendMediaClips = (media: PendingEditorMedia[]) => {
+  const appendMediaClips = (media: PendingEditorMedia[], requestedStart = currentTime, requestedLaneId = "") => {
     if (!media.length) return;
     const type = media[0].type;
-    const insertionStart = clampValue(currentTime, 0, Math.max(0, duration - 0.05));
-    const timelineEnd = duration > 0.05 ? duration : Number.POSITIVE_INFINITY;
+    const hadVisualTrack = videoClipsRef.current.length > 0 || tracksRef.current.some((track) => track.type === "image");
+    const insertionStart = Math.max(0, requestedStart);
+    const timelineEnd = Number.POSITIVE_INFINITY;
     const nextTracks = [...tracksRef.current];
     const selectedClip = nextTracks.find((track) => track.id === selectedTrackId);
     const selectedLaneType = nextTracks.find((track) => getTrackLaneId(track) === selectedLaneId)?.type;
     const firstCompatibleClip = nextTracks.find((track) => track.type === type);
+    const requestedLaneType = nextTracks.find((track) => getTrackLaneId(track) === requestedLaneId)?.type;
     let preferredLaneId =
-      selectedLaneId && selectedLaneType === type
+      requestedLaneId && requestedLaneType === type
+        ? requestedLaneId
+        : selectedLaneId && selectedLaneType === type
         ? selectedLaneId
         : selectedClip?.type === type
           ? getTrackLaneId(selectedClip)
@@ -1062,25 +1460,34 @@ export default function LosslessVideoPage() {
       }
       const end = start + clipDuration;
       const clipId = createEditorId(type);
-      const videoAspectRatio = videoSize.width > 0 && videoSize.height > 0 ? videoSize.width / videoSize.height : 16 / 9;
-      const defaultImageWidth = 18;
+      const imageStartsVisualProject = !hadVisualTrack && item.type === "image";
+      const sourceImageAspectRatio = item.type === "image"
+        ? item.sourceWidth / Math.max(1, item.sourceHeight)
+        : 16 / 9;
+      const videoAspectRatio = imageStartsVisualProject
+        ? sourceImageAspectRatio
+        : videoSize.width > 0 && videoSize.height > 0
+          ? videoSize.width / videoSize.height
+          : 16 / 9;
+      const defaultImageWidth = imageStartsVisualProject ? 100 : 18;
       const defaultImageHeight = item.type === "image"
         ? calculateImageHeightPercent(defaultImageWidth, item.sourceWidth, item.sourceHeight, videoAspectRatio)
         : 18;
       const defaultImageTransform: MediaKeyframe = {
         id: createEditorId("static-transform"),
         time: start,
-        x: 85,
-        y: 15,
+        x: imageStartsVisualProject ? 50 : 85,
+        y: imageStartsVisualProject ? 50 : 15,
         width: defaultImageWidth,
         height: defaultImageHeight,
         rotation: 0,
-        opacity: 0.85,
+        opacity: imageStartsVisualProject ? 1 : 0.85,
         easing: "linear"
       };
       const track: EditorTrack = item.type === "audio"
-        ? {
+          ? {
             id: clipId,
+            sourceId: item.sourceId,
             laneId,
             type: "audio",
             name: item.file.name,
@@ -1095,8 +1502,9 @@ export default function LosslessVideoPage() {
             fadeOut: 0,
             loop: false
           }
-        : {
+          : {
             id: clipId,
+            sourceId: item.sourceId,
             laneId,
             type: "image",
             name: item.file.name,
@@ -1106,7 +1514,7 @@ export default function LosslessVideoPage() {
             end,
             enabled: true,
             animated: false,
-            opacity: 0.85,
+            opacity: imageStartsVisualProject ? 1 : 0.85,
             sourceWidth: item.sourceWidth,
             sourceHeight: item.sourceHeight,
             videoAspectRatio,
@@ -1121,7 +1529,12 @@ export default function LosslessVideoPage() {
 
     tracksRef.current = nextTracks;
     setTracks(nextTracks);
+    if (!hadVisualTrack && media[0].type === "image") {
+      setVideoSize({ width: media[0].sourceWidth, height: media[0].sourceHeight });
+    }
+    setTimelineLaneOrder((current) => mergeTimelineLaneOrder(current, videoClipsRef.current, nextTracks));
     if (lastAdded) {
+      setSelectedVideoClipId("");
       setSelectedTrackId(lastAdded.id);
       setSelectedLaneId(getTrackLaneId(lastAdded));
       setSelectedKeyframeId(lastAdded.type === "image" && lastAdded.animated ? lastAdded.keyframes[0]?.id || "" : "");
@@ -1130,34 +1543,233 @@ export default function LosslessVideoPage() {
   };
 
   const acceptAudioTracks = async (files: File[]) => {
-    const validFiles = files.filter(isAudioFile);
+    const existingFiles = new Set([
+      ...videoSourcesRef.current.map((source) => mediaFileIdentity(source.file)),
+      ...mediaResourcesRef.current.map((resource) => mediaFileIdentity(resource.file))
+    ]);
+    const validFiles = files.filter((file) => isAudioFile(file) && !existingFiles.has(mediaFileIdentity(file)));
     if (!validFiles.length) {
-      notify({ type: "warning", title: "请选择音频文件" });
+      notify({ type: "warning", title: "没有可导入的新音频" });
       return;
     }
-    const media = await Promise.all(
-      validFiles.map(async (file): Promise<PendingEditorMedia> => {
+    const resources = await Promise.all(
+      validFiles.map(async (file): Promise<ImportedAudioResource> => {
         const previewUrl = URL.createObjectURL(file);
-        return { type: "audio", file, previewUrl, sourceDuration: await readAudioDuration(previewUrl) };
+        return {
+          id: createEditorId("audio-source"),
+          type: "audio",
+          name: file.name,
+          file,
+          previewUrl,
+          duration: await readAudioDuration(previewUrl)
+        };
       })
     );
-    appendMediaClips(media);
+    const nextResources = [...mediaResourcesRef.current, ...resources];
+    mediaResourcesRef.current = nextResources;
+    setMediaResources(nextResources);
+    setSelectedResourceId(resources[resources.length - 1].id);
+    setInspectorTab("tracks");
+    notify({ type: "success", title: "音频已导入", message: `${resources.length} 个资源` });
   };
 
   const acceptImageTracks = async (files: File[]) => {
-    const validFiles = files.filter(isImageFile);
+    const existingFiles = new Set([
+      ...videoSourcesRef.current.map((source) => mediaFileIdentity(source.file)),
+      ...mediaResourcesRef.current.map((resource) => mediaFileIdentity(resource.file))
+    ]);
+    const validFiles = files.filter((file) => isImageFile(file) && !existingFiles.has(mediaFileIdentity(file)));
     if (!validFiles.length) {
-      notify({ type: "warning", title: "请选择标签图片" });
+      notify({ type: "warning", title: "没有可导入的新图片" });
       return;
     }
-    const media = await Promise.all(
-      validFiles.map(async (file): Promise<PendingEditorMedia> => {
+    const resources = await Promise.all(
+      validFiles.map(async (file): Promise<ImportedImageResource> => {
         const previewUrl = URL.createObjectURL(file);
         const size = await readImageSize(previewUrl);
-        return { type: "image", file, previewUrl, sourceWidth: size.width, sourceHeight: size.height };
+        return {
+          id: createEditorId("image-source"),
+          type: "image",
+          name: file.name,
+          file,
+          previewUrl,
+          width: size.width,
+          height: size.height
+        };
       })
     );
-    appendMediaClips(media);
+    const nextResources = [...mediaResourcesRef.current, ...resources];
+    mediaResourcesRef.current = nextResources;
+    setMediaResources(nextResources);
+    setSelectedResourceId(resources[resources.length - 1].id);
+    setInspectorTab("tracks");
+    notify({ type: "success", title: "图片已导入", message: `${resources.length} 个资源` });
+  };
+
+  const importResourceFiles = async (files: File[]) => {
+    const videos = files.filter(isVideoFile);
+    const audios = files.filter(isAudioFile);
+    const images = files.filter(isImageFile);
+    if (!videos.length && !audios.length && !images.length) {
+      notify({ type: "warning", title: "不支持这些文件" });
+      return;
+    }
+    if (videos.length) await acceptVideoTracks(videos);
+    if (audios.length) await acceptAudioTracks(audios);
+    if (images.length) await acceptImageTracks(images);
+  };
+
+  const removeImportedResource = (resource: ImportedResource) => {
+    const inUse = resource.type === "video"
+      ? videoClipsRef.current.some((clip) => clip.sourceId === resource.id)
+      : tracksRef.current.some((track) => track.sourceId === resource.id);
+    if (inUse) {
+      notify({ type: "warning", title: "资源正在时间轴中使用", message: "请先删除对应片段" });
+      return;
+    }
+    URL.revokeObjectURL(resource.previewUrl);
+    setSelectedResourceId((current) => current === resource.id ? "" : current);
+    if (resource.type === "video") {
+      const remainingSources = videoSourcesRef.current.filter((source) => source.id !== resource.id);
+      const nextPrimarySource = resource.primary
+        ? remainingSources.find((source) => videoClipsRef.current.some((clip) => clip.sourceId === source.id))
+        : remainingSources.find((source) => source.primary);
+      const nextSources = remainingSources.map((source) => ({ ...source, primary: source.id === nextPrimarySource?.id }));
+      videoSourcesRef.current = nextSources;
+      setVideoSources(nextSources);
+      if (resource.primary) {
+        videoRef.current?.pause();
+        setVideoFile(nextPrimarySource?.file || null);
+        setVideoInput(nextPrimarySource ? createInputFromFile(nextPrimarySource.file) : null);
+        setPreviewUrl(nextPrimarySource?.previewUrl || "");
+        setDuration(nextPrimarySource?.duration || 0);
+        if (!nextPrimarySource && !tracksRef.current.some((track) => track.type === "image")) {
+          setVideoSize({ width: 1920, height: 1080 });
+        }
+        setCurrentTime((value) => Math.min(value, getTimelineProjectDuration(videoClipsRef.current, tracksRef.current)));
+        resetResult();
+      }
+    } else {
+      const nextResources = mediaResourcesRef.current.filter((item) => item.id !== resource.id);
+      mediaResourcesRef.current = nextResources;
+      setMediaResources(nextResources);
+    }
+  };
+
+  const insertVideoResourceOnTimeline = (source: VideoEditorSource, requestedTime: number, requestedLaneId = "") => {
+    if (source.duration <= 0.05) {
+      notify({ type: "warning", title: "视频资源时长无效", message: source.name });
+      return;
+    }
+    if (!videoInput) {
+      const promotedSources = videoSourcesRef.current.map((item) => ({ ...item, primary: item.id === source.id }));
+      const promotedSource = promotedSources.find((item) => item.id === source.id) || { ...source, primary: true };
+      videoSourcesRef.current = promotedSources;
+      setVideoSources(promotedSources);
+      setVideoFile(promotedSource.file);
+      setVideoInput(createInputFromFile(promotedSource.file));
+      setPreviewUrl(promotedSource.previewUrl);
+      setDuration(promotedSource.duration);
+      if (!videoClipsRef.current.length && !tracksRef.current.some((track) => track.type === "image")) {
+        setVideoSize({ width: promotedSource.width, height: promotedSource.height });
+      }
+    }
+
+    const insertionTime = Math.max(0, requestedTime);
+    const insertionDuration = source.duration;
+    const videoLaneIds = Array.from(new Set(videoClipsRef.current.map((clip) => clip.laneId)));
+    const selectedLaneIsVideo = videoClipsRef.current.some((clip) => clip.laneId === selectedLaneId);
+    const requestedLaneIsVideo = videoClipsRef.current.some((clip) => clip.laneId === requestedLaneId);
+    const preferredLaneId = requestedLaneIsVideo
+      ? requestedLaneId
+      : selectedLaneIsVideo
+        ? selectedLaneId
+        : videoLaneIds[0] || "";
+    const laneId = preferredLaneId || createEditorId("video-lane");
+    const insertionStart = preferredLaneId
+      ? findAvailableClipStart(
+          videoClipsRef.current.filter((clip) => clip.laneId === preferredLaneId),
+          insertionTime,
+          insertionDuration,
+          Number.POSITIVE_INFINITY
+        ) ?? insertionTime
+      : insertionTime;
+    const insertedClip: VideoEditorClip = {
+      id: createEditorId("video-clip"),
+      sourceId: source.id,
+      laneId,
+      name: source.name,
+      start: insertionStart,
+      end: insertionStart + insertionDuration,
+      sourceStart: 0,
+      sourceEnd: insertionDuration
+    };
+    const nextClips = [...videoClipsRef.current, insertedClip].sort((left, right) => left.start - right.start);
+    videoClipsRef.current = nextClips;
+    setVideoClips(nextClips);
+    setTimelineLaneOrder((current) => mergeTimelineLaneOrder(current, nextClips, tracksRef.current));
+    activeVideoClipIdRef.current = insertedClip.id;
+    setActiveVideoClipId(insertedClip.id);
+    setPreviewUrl(source.previewUrl);
+    setSelectedVideoClipId(insertedClip.id);
+    setSelectedTrackId("");
+    setSelectedLaneId(laneId);
+    setSelectedKeyframeId("");
+    setInspectorTab("tracks");
+    resetResult();
+    seekPreview(insertionStart, false);
+  };
+
+  const addImportedResourceToTimeline = (resourceId: string, requestedTime = currentTime, requestedLaneId = "") => {
+    const resource = importedResources.find((item) => item.id === resourceId);
+    if (!resource) return;
+    if (resource.type === "video") {
+      insertVideoResourceOnTimeline(resource, requestedTime, requestedLaneId);
+      return;
+    }
+    const clipPreviewUrl = URL.createObjectURL(resource.file);
+    appendMediaClips([
+      resource.type === "audio"
+        ? {
+            type: "audio",
+            sourceId: resource.id,
+            file: resource.file,
+            previewUrl: clipPreviewUrl,
+            sourceDuration: resource.duration
+          }
+        : {
+            type: "image",
+            sourceId: resource.id,
+            file: resource.file,
+            previewUrl: clipPreviewUrl,
+            sourceWidth: resource.width,
+            sourceHeight: resource.height
+          }
+    ], requestedTime, requestedLaneId);
+  };
+
+  const handleResourceBinDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setResourceDropActive(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length) void importResourceFiles(files);
+  };
+
+  const handleTimelineResourceDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    const resourceId = event.dataTransfer.getData(resourceDragMime);
+    if (!resourceId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setTimelineDropActive(false);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const targetRow = (event.target as HTMLElement).closest<HTMLElement>(".lossless-media-track-row");
+    const dropTime = clampValue(
+      ((event.clientX - rect.left) / Math.max(1, rect.width)) * timelineDisplayDuration,
+      0,
+      timelineDisplayDuration
+    );
+    addImportedResourceToTimeline(resourceId, dropTime, targetRow?.dataset.laneId || "");
   };
 
   const updateTrack = (trackId: string, updater: (track: EditorTrack) => EditorTrack) => {
@@ -1172,6 +1784,7 @@ export default function LosslessVideoPage() {
     const nextTracks = tracksRef.current.filter((item) => item.id !== trackId);
     tracksRef.current = nextTracks;
     setTracks(nextTracks);
+    setTimelineLaneOrder((current) => mergeTimelineLaneOrder(current, videoClipsRef.current, nextTracks));
     if (selectedTrackId === trackId) {
       setSelectedTrackId("");
       setSelectedKeyframeId("");
@@ -1184,7 +1797,7 @@ export default function LosslessVideoPage() {
   const updateTrackBoundary = (trackId: string, boundary: "start" | "end", value: number) => {
     setTracks((current) => current.map((track) => {
       if (track.id !== trackId) return track;
-      const timelineEnd = duration > 0 ? duration : Math.max(track.end, value);
+      const timelineEnd = projectVideoDuration > 0 ? projectVideoDuration : Math.max(track.end, value);
       const laneBounds = getLaneClipBounds(current, track, timelineEnd);
       if (boundary === "start") {
         const start = clampValue(value, laneBounds.minimumStart, Math.max(laneBounds.minimumStart, track.end - 0.05));
@@ -1213,10 +1826,123 @@ export default function LosslessVideoPage() {
     const row = target.closest(".lossless-media-track-row") as HTMLElement | null;
     if (!row) return currentTime;
     const rect = row.getBoundingClientRect();
-    return clampValue(((clientX - rect.left) / Math.max(1, rect.width)) * timelineDuration, 0, duration || timelineDuration);
+    return clampValue(((clientX - rect.left) / Math.max(1, rect.width)) * timelineDisplayDuration, 0, timelineDisplayDuration);
+  };
+
+  const selectVideoClipAtPointer = (event: ReactMouseEvent<HTMLElement>, clip: VideoEditorClip) => {
+    setSelectedVideoClipId(clip.id);
+    setSelectedTrackId("");
+    setSelectedLaneId(clip.laneId);
+    setSelectedKeyframeId("");
+    setInspectorTab("tracks");
+    if (trackDragMovedRef.current) {
+      trackDragMovedRef.current = false;
+      return;
+    }
+    seekPreview(clampValue(timelineTimeAtPointer(event.currentTarget, event.clientX), clip.start, clip.end), false);
+  };
+
+  const startVideoClipTimelineDrag = (
+    event: ReactPointerEvent<HTMLElement>,
+    clip: VideoEditorClip,
+    action: "move" | "trim-start" | "trim-end"
+  ) => {
+    event.preventDefault();
+    const row = event.currentTarget.closest(".lossless-media-track-row") as HTMLElement | null;
+    if (!row) return;
+    const rowRect = row.getBoundingClientRect();
+    const pointerStart = event.clientX;
+    const originalStart = clip.start;
+    const originalEnd = clip.end;
+    const originalSourceStart = clip.sourceStart;
+    const originalSourceEnd = clip.sourceEnd;
+    const sourceDuration = videoSourcesRef.current.find((source) => source.id === clip.sourceId)?.duration || originalSourceEnd;
+    const duration = originalEnd - originalStart;
+    trackDragMovedRef.current = false;
+    setSelectedVideoClipId(clip.id);
+    setSelectedTrackId("");
+    setSelectedLaneId(clip.laneId);
+    setSelectedKeyframeId("");
+    setInspectorTab("tracks");
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const pixelDelta = moveEvent.clientX - pointerStart;
+      if (Math.abs(pixelDelta) > 2 || Math.abs(moveEvent.clientY - event.clientY) > 2) trackDragMovedRef.current = true;
+      const timeDelta = (pixelDelta / Math.max(1, rowRect.width)) * timelineDisplayDuration;
+      setVideoClips((current) => {
+        let nextLaneId = clip.laneId;
+        const targetRow = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLElement>(".lossless-media-track-row");
+        if (action === "move" && targetRow?.dataset.laneType === "video" && targetRow.dataset.laneId) {
+          nextLaneId = targetRow.dataset.laneId;
+        }
+        if (action === "move") {
+          const start = Math.max(0, originalStart + timeDelta);
+          const end = start + duration;
+          const overlaps = current.some((item) => item.id !== clip.id
+            && item.laneId === nextLaneId
+            && start < item.end - 0.001
+            && end > item.start + 0.001);
+          if (overlaps) nextLaneId = clip.laneId;
+          if (nextLaneId !== clip.laneId) {
+            const next = current.map((item) => item.id === clip.id
+              ? { ...item, laneId: nextLaneId, start, end }
+              : item);
+            videoClipsRef.current = next;
+            setSelectedLaneId(nextLaneId);
+            return next;
+          }
+          const sameLaneClips = current.filter((item) => item.id !== clip.id && item.laneId === nextLaneId);
+          const laneStart = sameLaneClips
+            .filter((item) => item.end <= originalStart + 0.001)
+            .reduce((maximum, item) => Math.max(maximum, item.end), 0);
+          const laneEnd = sameLaneClips
+            .filter((item) => item.start >= originalEnd - 0.001)
+            .reduce((minimum, item) => Math.min(minimum, item.start), Number.POSITIVE_INFINITY);
+          const delta = clampValue(timeDelta, laneStart - originalStart, laneEnd - originalEnd);
+          const next = current.map((item) => item.id === clip.id
+            ? { ...item, laneId: nextLaneId, start: originalStart + delta, end: originalEnd + delta }
+            : item);
+          videoClipsRef.current = next;
+          setSelectedLaneId(nextLaneId);
+          return next;
+        }
+        if (action === "trim-start") {
+          const previousEnd = current
+            .filter((item) => item.id !== clip.id && item.laneId === clip.laneId && item.end <= originalStart + 0.001)
+            .reduce((maximum, item) => Math.max(maximum, item.end), 0);
+          const start = clampValue(originalStart + timeDelta, previousEnd, originalEnd - 0.05);
+          const sourceStart = clampValue(originalSourceStart + start - originalStart, 0, originalSourceEnd - 0.05);
+          const adjustedStart = originalStart + sourceStart - originalSourceStart;
+          const next = current.map((item) => item.id === clip.id ? { ...item, start: adjustedStart, sourceStart } : item);
+          videoClipsRef.current = next;
+          return next;
+        }
+        const nextStart = current
+          .filter((item) => item.id !== clip.id && item.laneId === clip.laneId && item.start >= originalEnd - 0.001)
+          .reduce((minimum, item) => Math.min(minimum, item.start), Number.POSITIVE_INFINITY);
+        const end = clampValue(originalEnd + timeDelta, originalStart + 0.05, nextStart);
+        const sourceEnd = clampValue(originalSourceEnd + end - originalEnd, originalSourceStart + 0.05, sourceDuration);
+        const adjustedEnd = originalEnd + sourceEnd - originalSourceEnd;
+        const next = current.map((item) => item.id === clip.id ? { ...item, end: adjustedEnd, sourceEnd } : item);
+        videoClipsRef.current = next;
+        return next;
+      });
+    };
+    const handleUp = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      setTimelineLaneOrder((current) => mergeTimelineLaneOrder(current, videoClipsRef.current, tracksRef.current));
+      if (trackDragMovedRef.current) resetResult();
+      window.setTimeout(() => {
+        trackDragMovedRef.current = false;
+      }, 120);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
   };
 
   const selectTrackAtPointer = (event: ReactMouseEvent<HTMLElement>, track: EditorTrack) => {
+    setSelectedVideoClipId("");
     setSelectedTrackId(track.id);
     setSelectedLaneId(getTrackLaneId(track));
     setSelectedKeyframeId(track.type === "image" && track.animated ? track.keyframes[0]?.id || "" : "");
@@ -1244,11 +1970,15 @@ export default function LosslessVideoPage() {
     if (!row) return;
     const rowRect = row.getBoundingClientRect();
     const pointerStart = event.clientX;
+    const pointerStartY = event.clientY;
     const originalStart = track.start;
     const originalEnd = track.end;
-    const maxDuration = duration || timelineDuration;
+    const originalLaneId = getTrackLaneId(track);
+    const trackDuration = originalEnd - originalStart;
+    const maxDuration = timelineDisplayDuration;
     const laneBounds = getLaneClipBounds(tracksRef.current, track, maxDuration);
     trackDragMovedRef.current = false;
+    setSelectedVideoClipId("");
     setSelectedTrackId(track.id);
     setSelectedLaneId(getTrackLaneId(track));
     setSelectedKeyframeId(track.type === "image" && track.animated ? track.keyframes[0]?.id || "" : "");
@@ -1256,10 +1986,43 @@ export default function LosslessVideoPage() {
 
     const handleMove = (moveEvent: PointerEvent) => {
       const pixelDelta = moveEvent.clientX - pointerStart;
-      if (Math.abs(pixelDelta) > 2) trackDragMovedRef.current = true;
-      const timeDelta = (pixelDelta / Math.max(1, rowRect.width)) * timelineDuration;
-      setTracks((current) =>
-        current.map((item) => {
+      if (Math.abs(pixelDelta) > 2 || Math.abs(moveEvent.clientY - pointerStartY) > 2) trackDragMovedRef.current = true;
+      const timeDelta = (pixelDelta / Math.max(1, rowRect.width)) * timelineDisplayDuration;
+      setTracks((current) => {
+        let targetLaneId = originalLaneId;
+        if (action === "move") {
+          const targetRow = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLElement>(".lossless-media-track-row");
+          if (targetRow?.dataset.laneType === track.type && targetRow.dataset.laneId) {
+            targetLaneId = targetRow.dataset.laneId;
+          }
+          const proposedStart = clampValue(originalStart + timeDelta, 0, Math.max(0, maxDuration - trackDuration));
+          const proposedEnd = proposedStart + trackDuration;
+          const overlaps = current.some((item) => item.id !== track.id
+            && getTrackLaneId(item) === targetLaneId
+            && proposedStart < item.end - 0.001
+            && proposedEnd > item.start + 0.001);
+          if (overlaps) targetLaneId = originalLaneId;
+          if (targetLaneId !== originalLaneId) {
+            setSelectedLaneId(targetLaneId);
+            const next = current.map((item) => {
+              if (item.id !== track.id) return item;
+              const delta = proposedStart - originalStart;
+              return item.type === "image"
+                ? {
+                    ...item,
+                    laneId: targetLaneId,
+                    start: proposedStart,
+                    end: proposedEnd,
+                    staticTransform: { ...item.staticTransform, time: proposedStart },
+                    keyframes: item.keyframes.map((keyframe) => ({ ...keyframe, time: keyframe.time + delta }))
+                  }
+                : { ...item, laneId: targetLaneId, start: proposedStart, end: proposedEnd };
+            });
+            tracksRef.current = next;
+            return next;
+          }
+        }
+        const next = current.map((item) => {
           if (item.id !== track.id) return item;
           if (action === "move") {
             const delta = clampValue(
@@ -1297,12 +2060,15 @@ export default function LosslessVideoPage() {
                 keyframes: clampImageKeyframesToRange(track as ImageEditorTrack, originalStart, end)
               }
             : { ...item, end };
-        })
-      );
+        });
+        tracksRef.current = next;
+        return next;
+      });
     };
     const handleUp = () => {
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
+      setTimelineLaneOrder((current) => mergeTimelineLaneOrder(current, videoClipsRef.current, tracksRef.current));
       window.setTimeout(() => {
         trackDragMovedRef.current = false;
       }, 120);
@@ -1452,7 +2218,7 @@ export default function LosslessVideoPage() {
     const handleMove = (moveEvent: PointerEvent) => {
       const pixelDelta = moveEvent.clientX - pointerStart;
       if (Math.abs(pixelDelta) > 2) trackDragMovedRef.current = true;
-      const time = clampValue(keyframe.time + (pixelDelta / Math.max(1, rowRect.width)) * timelineDuration, track.start, track.end);
+      const time = clampValue(keyframe.time + (pixelDelta / Math.max(1, rowRect.width)) * timelineDisplayDuration, track.start, track.end);
       updateImageKeyframe(track.id, keyframe.id, { time });
       if (videoRef.current) {
         videoRef.current.currentTime = time;
@@ -1785,7 +2551,31 @@ export default function LosslessVideoPage() {
           if (fraction >= 0.999) startPolling();
         }
       );
-      const nextSegments = response.segments.map(normalizeSegment);
+      const normalizedSegments = response.segments.map(normalizeSegment);
+      const nextSegments = isVideoTimelineEdited(videoClipsRef.current, videoSourcesRef.current, response.duration || duration)
+        ? normalizedSegments.flatMap((segment): DuplicateSegment[] => {
+            const first = mapPrimarySourceRangeToProject(videoClipsRef.current, videoSourcesRef.current, segment.firstStart, segment.firstEnd);
+            const second = mapPrimarySourceRangeToProject(videoClipsRef.current, videoSourcesRef.current, segment.secondStart, segment.secondEnd);
+            const deletion = mapPrimarySourceRangeToProject(
+              videoClipsRef.current,
+              videoSourcesRef.current,
+              segment.deleteStart ?? segment.secondStart,
+              segment.deleteEnd ?? segment.secondEnd
+            );
+            if (!first || !second || !deletion) return [];
+            return [{
+              ...segment,
+              firstStart: first.start,
+              firstEnd: first.end,
+              secondStart: second.start,
+              secondEnd: second.end,
+              deleteStart: deletion.start,
+              deleteEnd: deletion.end,
+              duration: second.end - second.start,
+              deleteDuration: deletion.end - deletion.start
+            }];
+          })
+        : normalizedSegments;
       const nextRepeats = nextSegments.filter((segment) => segment.kind !== "slide-transition").length;
       const nextTransitions = nextSegments.filter((segment) => segment.kind === "slide-transition").length;
       setSegments(nextSegments);
@@ -1817,9 +2607,8 @@ export default function LosslessVideoPage() {
   };
 
   const runExport = async () => {
-    if (!videoInput) return;
-    if (!removableSegments.length && !enabledTracks.length && !audioSeparation.enabled) {
-      notify({ type: "warning", title: "没有需要导出的编辑内容" });
+    if (projectVideoDuration <= 0 || (!videoClips.length && !enabledTracks.length)) {
+      notify({ type: "warning", title: "时间轴没有可导出的素材" });
       return;
     }
     if (audioSeparation.enabled && audioSeparationStatus?.available !== true) {
@@ -1833,8 +2622,8 @@ export default function LosslessVideoPage() {
     setStatus("exporting");
     setError("");
     setProgress({ percent: 15, label: "导出中", detail: mode === "keyframe-copy" ? "按关键帧边界生成流拷贝切割方案" : "准备精确裁剪方案" });
-    if (enabledTracks.length) {
-      setProgress({ percent: 15, label: "导出中", detail: `正在上传并准备合成 ${enabledTracks.length} 个时间轴素材` });
+    if (enabledTracks.length || hasVideoEdits) {
+      setProgress({ percent: 15, label: "导出中", detail: `正在准备 ${videoClips.length + enabledTracks.length} 个时间轴素材` });
     }
     if (audioSeparation.enabled) {
       setProgress({
@@ -1873,14 +2662,23 @@ export default function LosslessVideoPage() {
       pollTimer = window.setInterval(() => void pollTask(), 500);
       const outputSuffix = audioSeparation.enabled
         ? audioSeparation.mode === "dialogue"
-          ? enabledTracks.length ? "_edited_dialogue.mp4" : "_dialogue.mp4"
-          : enabledTracks.length ? "_edited_voice.mp4" : "_voice.mp4"
-        : enabledTracks.length ? "_edited.mp4" : "_clean.mp4";
-      const outputName = videoInput.name.replace(/\.[^.]+$/, outputSuffix);
+          ? enabledTracks.length || hasVideoEdits ? "_edited_dialogue.mp4" : "_dialogue.mp4"
+          : enabledTracks.length || hasVideoEdits ? "_edited_voice.mp4" : "_voice.mp4"
+        : enabledTracks.length || hasVideoEdits ? "_edited.mp4" : "_clean.mp4";
+      const projectSourceName = videoInput?.name || importedResources[0]?.name || "timeline.mp4";
+      const outputName = projectSourceName.replace(/\.[^.]+$/, outputSuffix);
+      const laneLayer = (laneId: string) => {
+        const orderedIndex = timelineLaneOrder.indexOf(laneId);
+        if (orderedIndex >= 0) return orderedIndex;
+        const visibleIndex = timelineLanes.findIndex((lane) => lane.id === laneId);
+        return visibleIndex >= 0 ? visibleIndex : timelineLanes.length;
+      };
       const exportTracks: ExportMediaTrack[] = enabledTracks.map((track) =>
         track.type === "audio"
           ? {
               id: track.id,
+              laneId: getTrackLaneId(track),
+              layer: laneLayer(getTrackLaneId(track)),
               type: track.type,
               name: track.name,
               start: track.start,
@@ -1893,6 +2691,8 @@ export default function LosslessVideoPage() {
             }
           : {
               id: track.id,
+              laneId: getTrackLaneId(track),
+              layer: laneLayer(getTrackLaneId(track)),
               type: track.type,
               name: track.name,
               start: track.start,
@@ -1904,18 +2704,45 @@ export default function LosslessVideoPage() {
                 : [{ ...track.staticTransform, time: track.start, easing: "linear" }]
             }
       );
+      const exportVideoClips: ExportVideoClip[] | undefined = videoClips.length
+        ? videoClips.map((clip) => {
+            const source = videoSources.find((item) => item.id === clip.sourceId);
+            return {
+              id: clip.id,
+              sourceId: clip.sourceId,
+              laneId: clip.laneId,
+              layer: laneLayer(clip.laneId),
+              name: clip.name,
+              start: clip.start,
+              end: clip.end,
+              sourceStart: clip.sourceStart,
+              sourceEnd: clip.sourceEnd,
+              primary: Boolean(source?.primary)
+            };
+          })
+        : undefined;
       const response = await exportCleanVideo(
         {
           taskId: exportTaskId,
-          input: videoInput,
+          input: videoInput || { name: "timeline.mp4" },
+          projectDuration: projectVideoDuration,
+          canvasWidth: Math.max(2, Math.round(videoSize.width)),
+          canvasHeight: Math.max(2, Math.round(videoSize.height)),
+          frameRate: timelineFps,
           segments,
           tracks: exportTracks,
+          videoClips: exportVideoClips,
           mode,
           outputName,
           audioSeparation
         },
         abortRef.current.signal,
         enabledTracks.map((track) => ({ trackId: track.id, file: track.file })),
+        videoClips.length
+          ? videoSources
+              .filter((source) => !source.primary && usedVideoSourceIds.has(source.id))
+              .map((source) => ({ sourceId: source.id, file: source.file }))
+          : [],
         taskId ? undefined : videoFile || undefined,
         (fraction) => {
           setProgress((current) =>
@@ -2036,25 +2863,63 @@ export default function LosslessVideoPage() {
     });
   };
 
+  const applyPendingVideoSeek = (video: HTMLVideoElement) => {
+    const pending = pendingVideoSeekRef.current;
+    const clip = videoClipsRef.current.find((item) => item.id === activeVideoClipIdRef.current);
+    if (!pending || !clip) return;
+    const sourceTime = clampValue(clip.sourceStart + pending.time - clip.start, clip.sourceStart, clip.sourceEnd);
+    if (Number.isFinite(video.duration)) video.currentTime = Math.min(sourceTime, video.duration);
+    video.playbackRate = playbackRate;
+    video.muted = isMuted;
+    pendingVideoSeekRef.current = null;
+    syncAudioPreviews(pending.time, pending.shouldPlay);
+    if (pending.shouldPlay) void video.play().catch(() => undefined);
+  };
+
   const seekPreview = (seconds: number, shouldPlay = true) => {
+    const clips = videoClipsRef.current;
+    const projectDuration = getTimelineProjectDuration(clips, tracksRef.current);
+    const nextTime = clampValue(seconds, 0, Math.max(0, projectDuration));
+    const clip = findVideoClipAtTime(clips, nextTime, timelineLaneOrderRef.current);
     const video = videoRef.current;
-    if (!video) return;
-    const nextTime = Math.min(Math.max(0, seconds), Number.isFinite(video.duration) ? video.duration : seconds);
-    video.currentTime = nextTime;
+    const continuePlayback = shouldPlay || isPlaying;
+    playbackAnchorRef.current = { time: nextTime, startedAt: performance.now() };
+    pendingVideoSeekRef.current = { time: nextTime, shouldPlay: continuePlayback };
     setCurrentTime(nextTime);
-    syncAudioPreviews(nextTime, shouldPlay || !video.paused);
-    if (shouldPlay) void video.play();
+    syncAudioPreviews(nextTime, continuePlayback);
+    if (shouldPlay && !isPlaying) setIsPlaying(true);
+    if (!clip) {
+      video?.pause();
+      activeVideoClipIdRef.current = "";
+      setActiveVideoClipId("");
+      pendingVideoSeekRef.current = null;
+      return;
+    }
+    if (activeVideoClipIdRef.current !== clip.id) {
+      const previousClip = videoClipsRef.current.find((item) => item.id === activeVideoClipIdRef.current);
+      if (previousClip?.sourceId !== clip.sourceId) video?.pause();
+      activeVideoClipIdRef.current = clip.id;
+      setActiveVideoClipId(clip.id);
+      if (video && previousClip?.sourceId === clip.sourceId) applyPendingVideoSeek(video);
+      return;
+    }
+    if (video) applyPendingVideoSeek(video);
   };
 
   const togglePlayback = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) void video.play();
-    else video.pause();
+    const projectDuration = getTimelineProjectDuration(videoClipsRef.current, tracksRef.current);
+    if (projectDuration <= 0.001) return;
+    if (isPlaying) {
+      videoRef.current?.pause();
+      setIsPlaying(false);
+      syncAudioPreviews(currentTime, false);
+      return;
+    }
+    seekPreview(currentTime >= projectDuration - 0.001 ? 0 : currentTime, true);
   };
 
   const changeTimelineZoom = (exponent: number) => {
-    const nextZoom = 2 ** clampValue(exponent, 0, timelineMaxZoomExponent);
+    const nextZoom = 2 ** clampValue(exponent, timelineMinZoomExponent, timelineMaxZoomExponent);
     const viewport = timelineScrollRef.current;
     if (!viewport || !timelineDuration) {
       setTimelineZoom(nextZoom);
@@ -2062,19 +2927,21 @@ export default function LosslessVideoPage() {
     }
     const oldCanvasWidth = Math.max(viewport.clientWidth, viewport.scrollWidth);
     const oldContentWidth = Math.max(1, oldCanvasWidth - timelineEdgeSpacePx * 2);
-    const playheadPosition = timelineEdgeSpacePx + (currentTime / timelineDuration) * oldContentWidth;
+    const oldDisplayDuration = timelineDuration / Math.min(1, timelineZoom);
+    const playheadPosition = timelineEdgeSpacePx + (currentTime / oldDisplayDuration) * oldContentWidth;
     const playheadViewportX = playheadPosition - viewport.scrollLeft;
     const playheadIsVisible = playheadViewportX >= 0 && playheadViewportX <= viewport.clientWidth;
     const anchorViewportX = playheadIsVisible ? playheadViewportX : viewport.clientWidth / 2;
-    const anchorRatio = playheadIsVisible
-      ? currentTime / timelineDuration
-      : clampValue((viewport.scrollLeft + anchorViewportX - timelineEdgeSpacePx) / oldContentWidth, 0, 1);
+    const anchorTime = playheadIsVisible
+      ? currentTime
+      : clampValue((viewport.scrollLeft + anchorViewportX - timelineEdgeSpacePx) / oldContentWidth, 0, 1) * oldDisplayDuration;
     setTimelineZoom(nextZoom);
     window.requestAnimationFrame(() => {
       const newCanvasWidth = Math.max(viewport.clientWidth, viewport.scrollWidth);
       const newContentWidth = Math.max(1, newCanvasWidth - timelineEdgeSpacePx * 2);
+      const newDisplayDuration = timelineDuration / Math.min(1, nextZoom);
       const nextScrollLeft = clampValue(
-        timelineEdgeSpacePx + anchorRatio * newContentWidth - anchorViewportX,
+        timelineEdgeSpacePx + (anchorTime / newDisplayDuration) * newContentWidth - anchorViewportX,
         0,
         Math.max(0, newCanvasWidth - viewport.clientWidth)
       );
@@ -2088,7 +2955,7 @@ export default function LosslessVideoPage() {
     const ruler = event.currentTarget;
     const seekAtPointer = (clientX: number) => {
       const rect = ruler.getBoundingClientRect();
-      const time = clampValue(((clientX - rect.left) / Math.max(1, rect.width)) * timelineDuration, 0, timelineDuration);
+      const time = clampValue(((clientX - rect.left) / Math.max(1, rect.width)) * timelineDisplayDuration, 0, timelineDisplayDuration);
       seekPreview(time, false);
     };
     seekAtPointer(event.clientX);
@@ -2111,7 +2978,7 @@ export default function LosslessVideoPage() {
         : event.key === "Home"
           ? 0
           : event.key === "End"
-            ? timelineDuration
+            ? projectVideoDuration
             : undefined;
     if (target === undefined) return;
     event.preventDefault();
@@ -2119,10 +2986,9 @@ export default function LosslessVideoPage() {
   };
 
   const stepFrame = (direction: -1 | 1) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.pause();
-    seekPreview(video.currentTime + direction / timelineFps, false);
+    videoRef.current?.pause();
+    setIsPlaying(false);
+    seekPreview(currentTime + direction / timelineFps, false);
   };
 
   const seekCandidate = (direction: -1 | 1) => {
@@ -2130,7 +2996,7 @@ export default function LosslessVideoPage() {
     const points = segments
       .map((segment) => segment.deleteStart ?? segment.secondStart)
       .sort((left, right) => left - right);
-    const activeTime = videoRef.current?.currentTime ?? currentTime;
+    const activeTime = currentTime;
     const target =
       direction > 0
         ? points.find((time) => time > activeTime + 0.05) ?? points[0]
@@ -2155,6 +3021,79 @@ export default function LosslessVideoPage() {
     });
   };
 
+  const handlePreviewLoadedMetadata = (video: HTMLVideoElement) => {
+    const currentClip = videoClipsRef.current.find((clip) => clip.id === activeVideoClipIdRef.current);
+    const source = videoSourcesRef.current.find((item) => item.id === currentClip?.sourceId)
+      || videoSourcesRef.current.find((item) => item.primary);
+    if (!source) return;
+    const metadata = {
+      duration: Number.isFinite(video.duration) ? video.duration : source.duration,
+      width: video.videoWidth || source.width || 16,
+      height: video.videoHeight || source.height || 9
+    };
+    const nextSources = videoSourcesRef.current.map((item) => item.id === source.id ? { ...item, ...metadata } : item);
+    videoSourcesRef.current = nextSources;
+    setVideoSources(nextSources);
+    video.playbackRate = playbackRate;
+    video.muted = isMuted;
+
+    if (source.primary) {
+      setDuration(metadata.duration);
+    }
+    window.requestAnimationFrame(() => applyPendingVideoSeek(video));
+  };
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    playbackAnchorRef.current = { time: currentTime, startedAt: performance.now() };
+    let frameId = 0;
+    const tick = (now: number) => {
+      const projectDuration = getTimelineProjectDuration(videoClipsRef.current, tracksRef.current);
+      const anchor = playbackAnchorRef.current;
+      const nextTime = anchor.time + (now - anchor.startedAt) / 1000 * playbackRate;
+      if (nextTime >= projectDuration - 0.0005) {
+        setCurrentTime(projectDuration);
+        setIsPlaying(false);
+        videoRef.current?.pause();
+        syncAudioPreviews(projectDuration, false);
+        return;
+      }
+      setCurrentTime(nextTime);
+      frameId = window.requestAnimationFrame(tick);
+    };
+    frameId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isPlaying, playbackRate]);
+
+  useEffect(() => {
+    const clip = findVideoClipAtTime(videoClips, currentTime, timelineLaneOrder);
+    const video = videoRef.current;
+    if (!clip) {
+      video?.pause();
+      if (activeVideoClipIdRef.current) {
+        activeVideoClipIdRef.current = "";
+        setActiveVideoClipId("");
+      }
+      return;
+    }
+    if (activeVideoClipIdRef.current !== clip.id) {
+      pendingVideoSeekRef.current = { time: currentTime, shouldPlay: isPlaying };
+      activeVideoClipIdRef.current = clip.id;
+      setActiveVideoClipId(clip.id);
+      return;
+    }
+    if (!video || !Number.isFinite(video.duration)) return;
+    const sourceTime = clampValue(clip.sourceStart + currentTime - clip.start, clip.sourceStart, clip.sourceEnd);
+    if (Math.abs(video.currentTime - sourceTime) > 0.18) video.currentTime = Math.min(sourceTime, video.duration);
+    video.playbackRate = playbackRate;
+    video.muted = isMuted;
+    if (isPlaying) {
+      if (video.paused) void video.play().catch(() => undefined);
+    } else if (!video.paused) {
+      video.pause();
+    }
+  }, [activeVideoClipId, currentTime, isMuted, isPlaying, playbackRate, timelineLaneOrder, videoClips]);
+
   useEffect(() => {
     syncAudioPreviews(currentTime, isPlaying);
   }, [currentTime, isMuted, isPlaying, playbackRate, tracks]);
@@ -2167,6 +3106,21 @@ export default function LosslessVideoPage() {
         event.preventDefault();
         if (event.shiftKey) redoSelection();
         else undoSelection();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        splitSelectedVideoClip();
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        if (selectedVideoClipId) {
+          event.preventDefault();
+          removeVideoClip(selectedVideoClipId);
+        } else if (selectedTrackId) {
+          event.preventDefault();
+          removeTrack(selectedTrackId);
+        }
         return;
       }
       if (event.code === "Space" || event.key.toLowerCase() === "k") {
@@ -2193,11 +3147,6 @@ export default function LosslessVideoPage() {
       <section className="data-panel data-panel-full data-panel-compact lossless-video-panel">
         <header className="table-toolbar lossless-video-toolbar">
           <div className="lossless-toolbar-group">
-            <button className="primary-button" type="button" onClick={pickVideo} disabled={status === "detecting" || status === "exporting"}>
-              <FolderOpen size={16} />
-              打开视频
-            </button>
-            <span className="lossless-toolbar-separator" />
             <button className="lossless-icon-button" type="button" title="撤销片段选择" aria-label="撤销片段选择" onClick={undoSelection} disabled={!canUndoSelection}>
               <Undo2 size={16} />
             </button>
@@ -2215,58 +3164,35 @@ export default function LosslessVideoPage() {
             </button>
           </div>
           <nav className="lossless-header-menu" role="tablist" aria-label="视频编辑功能">
+            <button className={inspectorTab === "tracks" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "tracks"} onClick={() => setInspectorTab("tracks")}>
+              <FolderOpen size={16} />
+              导入资源
+            </button>
             <button className={inspectorTab === "detect" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "detect"} onClick={() => setInspectorTab("detect")}>
               <Target size={16} />
               检测
-            </button>
-            <button className={inspectorTab === "tracks" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "tracks"} onClick={() => setInspectorTab("tracks")}>
-              <Layers3 size={16} />
-              时间轴
             </button>
             <button className={inspectorTab === "export" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "export"} onClick={() => setInspectorTab("export")}>
               <Download size={16} />
               导出
             </button>
           </nav>
-          <div className="lossless-file-chip" title={videoInput?.name}>
+          <div className="lossless-file-chip" title={importedResources.map((resource) => resource.name).join("\n")}>
             <FileVideo size={16} />
-            <strong>{videoInput?.name || "未打开视频"}</strong>
-            {videoInput ? <span>{formatFileSize(videoInput.size)}</span> : null}
+            <strong>{importedResources.length ? `${importedResources.length} 个已导入资源` : "未导入资源"}</strong>
+            {videoClips.length + tracks.length > 0 ? <span>{videoClips.length + tracks.length} 个时间轴素材</span> : null}
           </div>
         </header>
 
         <input
-          ref={fileInputRef}
-          className="lossless-file-input"
-          type="file"
-          accept="video/*,.mp4,.mov,.m4v,.mkv,.webm"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) acceptFile(file);
-            event.currentTarget.value = "";
-          }}
-        />
-        <input
-          ref={audioInputRef}
+          ref={resourceInputRef}
           className="lossless-file-input"
           type="file"
           multiple
-          accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus"
+          accept="video/*,audio/*,image/*,.mp4,.mov,.m4v,.mkv,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.png,.jpg,.jpeg,.webp,.bmp"
           onChange={(event) => {
             const files = Array.from(event.target.files || []);
-            if (files.length) void acceptAudioTracks(files);
-            event.currentTarget.value = "";
-          }}
-        />
-        <input
-          ref={imageInputRef}
-          className="lossless-file-input"
-          type="file"
-          multiple
-          accept="image/*,.png,.jpg,.jpeg,.webp,.bmp"
-          onChange={(event) => {
-            const files = Array.from(event.target.files || []);
-            if (files.length) acceptImageTracks(files);
+            if (files.length) void importResourceFiles(files);
             event.currentTarget.value = "";
           }}
         />
@@ -2289,72 +3215,24 @@ export default function LosslessVideoPage() {
         <div className="lossless-video-body">
           <div className="lossless-editing-layout">
             <main className="lossless-editor">
-              <section
-                className={`lossless-viewer ${dragging ? "is-dragging" : ""}`}
-                onDragEnter={(event) => {
-                  event.preventDefault();
-                  setDragging(true);
-                }}
-                onDragOver={(event) => event.preventDefault()}
-                onDragLeave={(event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setDragging(false);
-                  const files = Array.from(event.dataTransfer.files);
-                  const video = files.find(isVideoFile);
-                  const images = files.filter(isImageFile);
-                  const audios = files.filter(isAudioFile);
-                  if (video) acceptFile(video);
-                  else if (videoInput && (images.length || audios.length)) {
-                    if (images.length) acceptImageTracks(images);
-                    if (audios.length) void acceptAudioTracks(audios);
-                  }
-                  else notify({ type: "warning", title: videoInput ? "请拖入声音或图片素材" : "请先拖入视频" });
-                }}
-              >
+              <section className="lossless-viewer">
                 <div className="lossless-viewer-titlebar">
-                  <span>视频</span>
-                  <span>{duration ? formatSeconds(duration) : "--:--"}</span>
+                  <span>预览</span>
+                  <span>{projectVideoDuration ? formatSeconds(projectVideoDuration) : "--:--"}</span>
                 </div>
                 <div className="lossless-preview" ref={previewRef}>
-                  {previewUrl ? (
+                  {projectVideoDuration > 0 ? (
                     <>
-                      <video
-                        ref={videoRef}
-                        src={previewUrl}
-                        playsInline
-                        muted={isMuted}
-                        onClick={togglePlayback}
-                        onLoadedMetadata={(event) => {
-                          setDuration(event.currentTarget.duration);
-                          setVideoSize({ width: event.currentTarget.videoWidth || 16, height: event.currentTarget.videoHeight || 9 });
-                          event.currentTarget.playbackRate = playbackRate;
-                        }}
-                        onTimeUpdate={(event) => {
-                          const time = event.currentTarget.currentTime;
-                          setCurrentTime(time);
-                          syncAudioPreviews(time, !event.currentTarget.paused);
-                        }}
-                        onSeeked={(event) => {
-                          const time = event.currentTarget.currentTime;
-                          setCurrentTime(time);
-                          syncAudioPreviews(time, !event.currentTarget.paused);
-                        }}
-                        onPlay={(event) => {
-                          setIsPlaying(true);
-                          syncAudioPreviews(event.currentTarget.currentTime, true);
-                        }}
-                        onPause={(event) => {
-                          setIsPlaying(false);
-                          syncAudioPreviews(event.currentTarget.currentTime, false);
-                        }}
-                        onEnded={(event) => {
-                          setIsPlaying(false);
-                          syncAudioPreviews(event.currentTarget.currentTime, false);
-                        }}
-                      />
+                      {activeVideoSource && activeVideoClip ? (
+                        <video
+                          ref={videoRef}
+                          src={activeVideoSource.previewUrl}
+                          playsInline
+                          muted={isMuted}
+                          onClick={togglePlayback}
+                          onLoadedMetadata={(event) => handlePreviewLoadedMetadata(event.currentTarget)}
+                        />
+                      ) : <div className="lossless-preview-canvas" onClick={togglePlayback} />}
                       <div
                         className="lossless-media-overlay"
                         style={{
@@ -2364,7 +3242,7 @@ export default function LosslessVideoPage() {
                           height: previewVideoRect.height
                         }}
                       >
-                        {selectedImageTrack && selectedImageMotionPoints && currentTime >= selectedImageTrack.start && currentTime <= selectedImageTrack.end ? (
+                        {selectedImageTrack && selectedImageVisible && selectedImageMotionPoints && currentTime >= selectedImageTrack.start && currentTime <= selectedImageTrack.end ? (
                           <svg
                             className="lossless-image-motion-path"
                             viewBox={`0 0 ${Math.max(1, previewVideoRect.width)} ${Math.max(1, previewVideoRect.height)}`}
@@ -2391,7 +3269,11 @@ export default function LosslessVideoPage() {
                           if (track.type !== "image") return null;
                           const keyframe = interpolateImageKeyframe(track, currentTime);
                           const isSelected = selectedTrackId === track.id;
-                          const isActive = track.enabled && currentTime >= track.start && currentTime <= track.end;
+                          const trackLayer = timelineLayerByLane.get(getTrackLaneId(track)) ?? Number.POSITIVE_INFINITY;
+                          const isActive = track.enabled
+                            && trackLayer < activeVideoLayer
+                            && currentTime >= track.start
+                            && currentTime <= track.end;
                           return (
                             <div
                               className={`lossless-image-overlay ${isSelected ? "is-selected" : ""}`}
@@ -2399,7 +3281,7 @@ export default function LosslessVideoPage() {
                               ref={(element) => {
                                 if (element) {
                                   imageOverlayRefs.current.set(track.id, element);
-                                  paintImageTransform(element, interpolateImageKeyframe(track, videoRef.current?.currentTime ?? currentTime), track);
+                                  paintImageTransform(element, interpolateImageKeyframe(track, currentTime), track);
                                 } else {
                                   imageOverlayRefs.current.delete(track.id);
                                 }
@@ -2429,7 +3311,8 @@ export default function LosslessVideoPage() {
                               }}
                               style={{
                                 visibility: isActive ? "visible" : "hidden",
-                                pointerEvents: isActive ? "auto" : "none"
+                                pointerEvents: isActive ? "auto" : "none",
+                                zIndex: Math.max(1, timelineLanes.length - trackLayer)
                               }}
                             >
                               <img src={track.previewUrl} alt="" draggable={false} />
@@ -2494,11 +3377,10 @@ export default function LosslessVideoPage() {
                       </div>
                     </>
                   ) : (
-                    <button className="lossless-drop" type="button" onClick={pickVideo}>
+                    <div className="lossless-drop lossless-viewer-empty">
                       <FileVideo size={34} />
-                      <strong>拖入视频或点击打开</strong>
-                      <span>MP4 · MOV · MKV · WebM</span>
-                    </button>
+                      <strong>时间轴暂无视频</strong>
+                    </div>
                   )}
                 </div>
               </section>
@@ -2521,32 +3403,32 @@ export default function LosslessVideoPage() {
                 <header className="lossless-timeline-toolbar">
                   <div className="lossless-timeline-track-actions">
                     <strong>时间轴</strong>
-                    <button type="button" title="向选中音频轨添加素材" aria-label="添加音频素材" onClick={pickAudioTrack} disabled={!videoInput}>
-                      <Music2 size={15} />
+                    <button type="button" title="在播放头处分割选中视频" aria-label="分割视频片段" onClick={splitSelectedVideoClip} disabled={!canSplitSelectedVideoClip}>
+                      <Scissors size={15} />
                     </button>
-                    <button type="button" title="向选中图片轨添加素材" aria-label="添加图片素材" onClick={pickImageTrack} disabled={!videoInput}>
-                      <Sticker size={15} />
+                    <button type="button" title="删除选中视频片段" aria-label="删除视频片段" onClick={() => selectedVideoClip && removeVideoClip(selectedVideoClip.id)} disabled={!selectedVideoClip}>
+                      <Trash2 size={15} />
                     </button>
-                    <span>{tracks.length ? `${tracks.length} 个素材 · ${timelineLanes.length} 条轨道` : "V1"}</span>
+                    <span>{videoClips.length + tracks.length} 个素材 · {timelineLanes.length} 条轨道</span>
                   </div>
                   <div className="lossless-timeline-transport" aria-label="预览控制">
-                    <span className="lossless-timecode" title={`${formatSeconds(currentTime)} / ${duration ? formatSeconds(duration) : "--:--"}`}>
-                      {formatTimelineTimecode(currentTime, timelineFps)} / {duration ? formatTimelineTimecode(duration, timelineFps) : "--:--:--:--"}
+                    <span className="lossless-timecode" title={`${formatSeconds(currentTime)} / ${projectVideoDuration ? formatSeconds(projectVideoDuration) : "--:--"}`}>
+                      {formatTimelineTimecode(currentTime, timelineFps)} / {projectVideoDuration ? formatTimelineTimecode(projectVideoDuration, timelineFps) : "--:--:--:--"}
                     </span>
                     <div className="lossless-transport-buttons">
-                      <button type="button" title="上一个候选片段" aria-label="上一个候选片段" onClick={() => seekCandidate(-1)} disabled={!previewUrl || !segments.length}>
+                      <button type="button" title="上一个候选片段" aria-label="上一个候选片段" onClick={() => seekCandidate(-1)} disabled={projectVideoDuration <= 0 || !segments.length}>
                         <SkipBack size={15} />
                       </button>
-                      <button type="button" title="上一帧" aria-label="上一帧" onClick={() => stepFrame(-1)} disabled={!previewUrl}>
+                      <button type="button" title="上一帧" aria-label="上一帧" onClick={() => stepFrame(-1)} disabled={projectVideoDuration <= 0}>
                         <ChevronLeft size={15} />
                       </button>
-                      <button className="lossless-play-button" type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} onClick={togglePlayback} disabled={!previewUrl}>
+                      <button className="lossless-play-button" type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} onClick={togglePlayback} disabled={projectVideoDuration <= 0}>
                         {isPlaying ? <Pause size={15} /> : <Play size={15} />}
                       </button>
-                      <button type="button" title="下一帧" aria-label="下一帧" onClick={() => stepFrame(1)} disabled={!previewUrl}>
+                      <button type="button" title="下一帧" aria-label="下一帧" onClick={() => stepFrame(1)} disabled={projectVideoDuration <= 0}>
                         <ChevronRight size={15} />
                       </button>
-                      <button type="button" title="下一个候选片段" aria-label="下一个候选片段" onClick={() => seekCandidate(1)} disabled={!previewUrl || !segments.length}>
+                      <button type="button" title="下一个候选片段" aria-label="下一个候选片段" onClick={() => seekCandidate(1)} disabled={projectVideoDuration <= 0 || !segments.length}>
                         <SkipForward size={15} />
                       </button>
                     </div>
@@ -2559,9 +3441,9 @@ export default function LosslessVideoPage() {
                       maxMenuHeight={232}
                       onChange={changePlaybackRate}
                       ariaLabel="播放速度"
-                      disabled={!previewUrl}
+                      disabled={projectVideoDuration <= 0}
                     />
-                    <button className="lossless-timeline-mute" type="button" title={isMuted ? "打开声音" : "静音"} aria-label={isMuted ? "打开声音" : "静音"} onClick={toggleMute} disabled={!previewUrl}>
+                    <button className="lossless-timeline-mute" type="button" title={isMuted ? "打开声音" : "静音"} aria-label={isMuted ? "打开声音" : "静音"} onClick={toggleMute} disabled={projectVideoDuration <= 0}>
                       {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
                     </button>
                   </div>
@@ -2570,7 +3452,7 @@ export default function LosslessVideoPage() {
                       <ZoomIn size={15} />
                       <input
                         type="range"
-                        min={0}
+                        min={timelineMinZoomExponent}
                         max={timelineMaxZoomExponent}
                         step={0.125}
                         value={Math.min(Math.log2(timelineZoom), timelineMaxZoomExponent)}
@@ -2586,28 +3468,47 @@ export default function LosslessVideoPage() {
                   className="lossless-timeline-scroll"
                   onScroll={(event) => setTimelineViewport({ width: event.currentTarget.clientWidth, scrollLeft: event.currentTarget.scrollLeft })}
                 >
-                  <div className="lossless-timeline-canvas" style={{ width: `${timelineZoom * 100}%`, minHeight: `${108 + timelineLanes.length * 34}px` }}>
-                    <div className="lossless-timeline-content">
+                  <div className="lossless-timeline-canvas" style={{ width: `${timelineCanvasZoom * 100}%`, minHeight: `${74 + timelineLanes.length * 34}px` }}>
+                    <div
+                      className={`lossless-timeline-content ${timelineDropActive ? "is-resource-dragging" : ""}`}
+                      onDragEnter={(event) => {
+                        if (!Array.from(event.dataTransfer.types).includes(resourceDragMime)) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setTimelineDropActive(true);
+                      }}
+                      onDragOver={(event) => {
+                        if (!Array.from(event.dataTransfer.types).includes(resourceDragMime)) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.dataTransfer.dropEffect = "copy";
+                        setTimelineDropActive(true);
+                      }}
+                      onDragLeave={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTimelineDropActive(false);
+                      }}
+                      onDrop={handleTimelineResourceDrop}
+                    >
                       <div
                         className="lossless-timeline-ruler"
                         title="点击或拖动定位播放头"
                         role="slider"
-                        tabIndex={previewUrl ? 0 : -1}
+                        tabIndex={projectVideoDuration > 0 ? 0 : -1}
                         aria-label="播放进度"
                         aria-valuemin={0}
-                        aria-valuemax={timelineDuration}
-                        aria-valuenow={Math.min(currentTime, timelineDuration)}
+                        aria-valuemax={timelineDisplayDuration}
+                        aria-valuenow={Math.min(currentTime, timelineDisplayDuration)}
                         aria-valuetext={formatTimelineTimecode(currentTime, timelineFps)}
                         onPointerDown={startTimelineScrub}
                         onKeyDown={handleTimelineRulerKeyDown}
                       >
                         <i
                           className="lossless-timeline-ruler-progress"
-                          style={{ width: `${(Math.min(currentTime, timelineDuration) / timelineDuration) * 100}%` }}
+                          style={{ width: `${(Math.min(currentTime, timelineDisplayDuration) / timelineDisplayDuration) * 100}%` }}
                         />
                         {timelineTicks.map((tick) => (
                           <span className={`is-${tick.kind}`} key={`${tick.kind}-${tick.index}`} style={{ left: `${tick.percent}%` }}>
-                            {tick.kind === "major" ? <time>{formatTimelineTimecode(tick.time, timelineFps)}</time> : null}
+                            {tick.kind === "major" ? <time>{formatTimelineRulerLabel(tick.time, timelineScale.majorStep, timelineFps)}</time> : null}
                           </span>
                         ))}
                       </div>
@@ -2615,9 +3516,6 @@ export default function LosslessVideoPage() {
                         {timelineTicks.map((tick) => (
                           <i className={`is-${tick.kind}`} key={`grid-${tick.kind}-${tick.index}`} style={{ left: `${tick.percent}%` }} />
                         ))}
-                      </div>
-                      <div className="lossless-source-track">
-                        <span>{videoInput?.name || "V1"}</span>
                       </div>
                       <div className="lossless-candidate-track">
                         {segments.map((segment, index) => {
@@ -2628,39 +3526,75 @@ export default function LosslessVideoPage() {
                               key={`${segment.id}-timeline-${index}`}
                               type="button"
                               className={`${segment.kind === "slide-transition" ? "is-transition" : "is-repeat"} ${segment.deleteSecond ? "is-selected" : "is-kept"}`}
-                              style={{ left: `${(start / timelineDuration) * 100}%`, width: `${Math.max(((end - start) / timelineDuration) * 100, 0.08)}%` }}
+                              style={{ left: `${(start / timelineDisplayDuration) * 100}%`, width: `${Math.max(((end - start) / timelineDisplayDuration) * 100, 0.08)}%` }}
                               title={`${segment.kind === "slide-transition" ? "上滑转场" : "重复片段"} ${formatSeconds(start)} - ${formatSeconds(end)}`}
                               aria-label={`定位到 ${formatSeconds(start)}`}
                               onClick={() => seekPreview(start, false)}
-                              disabled={!previewUrl}
+                              disabled={projectVideoDuration <= 0}
                             />
                           );
                         })}
                       </div>
                       {timelineLanes.map((lane, laneIndex) => (
                         <div
-                          className={`lossless-media-track-row is-${lane.type} ${selectedLaneId === lane.id && !selectedTrackId ? "is-selected" : ""}`}
+                          className={`lossless-media-track-row is-${lane.type} ${selectedLaneId === lane.id && (lane.type === "video" ? !selectedVideoClipId : !selectedTrackId) ? "is-selected" : ""}`}
                           key={`${lane.id}-timeline`}
-                          style={{ top: `${102 + laneIndex * 34}px` }}
-                          aria-label={`${lane.type === "audio" ? "音频" : "图片"}轨道，${lane.clips.length} 个素材`}
+                          style={{ top: `${68 + laneIndex * 34}px` }}
+                          data-lane-id={lane.id}
+                          data-lane-type={lane.type}
+                          aria-label={`${lane.type === "video" ? "视频" : lane.type === "audio" ? "音频" : "图片"}轨道，${lane.type === "video" ? lane.videoClips.length : lane.clips.length} 个素材`}
                           onPointerDown={(event) => {
                             setSelectedLaneId(lane.id);
                             if (event.target === event.currentTarget) {
+                              setSelectedVideoClipId("");
                               setSelectedTrackId("");
                               setSelectedKeyframeId("");
                               setInspectorTab("tracks");
                             }
                           }}
                         >
-                        {lane.clips.map((track) => (
+                        {lane.type === "video" ? lane.videoClips.map((clip) => (
+                          <button
+                            className={`lossless-media-track-clip ${selectedVideoClipId === clip.id ? "is-selected" : ""}`}
+                            type="button"
+                            key={`${clip.id}-timeline`}
+                            aria-pressed={selectedVideoClipId === clip.id}
+                            style={{
+                              left: `${(clip.start / timelineDisplayDuration) * 100}%`,
+                              width: `${Math.max(((clip.end - clip.start) / timelineDisplayDuration) * 100, 0.35)}%`
+                            }}
+                            title={`${clip.name} · 拖动调整轨道和位置，拖动两端裁切`}
+                            onPointerDown={(event) => startVideoClipTimelineDrag(event, clip, "move")}
+                            onClick={(event) => selectVideoClipAtPointer(event, clip)}
+                          >
+                            <i
+                              className="lossless-media-track-handle is-start"
+                              title="调整入点"
+                              onPointerDown={(event) => {
+                                event.stopPropagation();
+                                startVideoClipTimelineDrag(event, clip, "trim-start");
+                              }}
+                            />
+                            <FileVideo size={13} />
+                            <span>{clip.name}</span>
+                            <i
+                              className="lossless-media-track-handle is-end"
+                              title="调整出点"
+                              onPointerDown={(event) => {
+                                event.stopPropagation();
+                                startVideoClipTimelineDrag(event, clip, "trim-end");
+                              }}
+                            />
+                          </button>
+                        )) : lane.clips.map((track) => (
                           <Fragment key={`${track.id}-timeline`}>
                             <button
                               className={`lossless-media-track-clip ${selectedTrackId === track.id ? "is-selected" : ""} ${track.enabled ? "" : "is-disabled"}`}
                               type="button"
                               aria-pressed={selectedTrackId === track.id}
                               style={{
-                                left: `${(track.start / timelineDuration) * 100}%`,
-                                width: `${Math.max(((track.end - track.start) / timelineDuration) * 100, 0.35)}%`
+                                left: `${(track.start / timelineDisplayDuration) * 100}%`,
+                                width: `${Math.max(((track.end - track.start) / timelineDisplayDuration) * 100, 0.35)}%`
                               }}
                               title={`${track.name} · 拖动调整位置，拖动两端调整时长${track.type === "image" && track.animated ? "，双击添加关键帧" : ""}`}
                               onPointerDown={(event) => startTrackTimelineDrag(event, track, "move")}
@@ -2694,7 +3628,7 @@ export default function LosslessVideoPage() {
                                     key={keyframe.id}
                                     title={`关键帧 ${formatSeconds(keyframe.time)}`}
                                     aria-label={`定位关键帧 ${formatSeconds(keyframe.time)}`}
-                                    style={{ left: `${(keyframe.time / timelineDuration) * 100}%` }}
+                                    style={{ left: `${(keyframe.time / timelineDisplayDuration) * 100}%` }}
                                     onPointerDown={(event) => startKeyframeTimelineDrag(event, track, keyframe)}
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -2717,7 +3651,7 @@ export default function LosslessVideoPage() {
                         ))}
                         </div>
                       ))}
-                      <i ref={timelinePlayheadRef} className="lossless-playhead" style={{ left: `${(Math.min(currentTime, timelineDuration) / timelineDuration) * 100}%` }} />
+                      <i ref={timelinePlayheadRef} className="lossless-playhead" style={{ left: `${(Math.min(currentTime, timelineDisplayDuration) / timelineDisplayDuration) * 100}%` }} />
                     </div>
                   </div>
                 </div>
@@ -2833,7 +3767,7 @@ export default function LosslessVideoPage() {
                                     >{confidence}%</span>
                                     {segment.kind === "slide-transition" ? "" : segment.keyframeAligned ? " · 流拷贝" : " · 需重编"}
                                   </small>
-                                  <button type="button" title="播放处理范围" aria-label={`从 ${formatSeconds(start)} 开始播放`} disabled={!previewUrl} onClick={() => seekPreview(start, true)}>
+                                  <button type="button" title="播放处理范围" aria-label={`从 ${formatSeconds(start)} 开始播放`} disabled={projectVideoDuration <= 0} onClick={() => seekPreview(start, true)}>
                                     <Play size={14} />
                                   </button>
                                 </div>
@@ -2855,22 +3789,162 @@ export default function LosslessVideoPage() {
                 <div className="lossless-inspector-content">
                   <section className="lossless-inspector-section">
                     <div className="lossless-section-title-row">
-                      <h3>时间轴素材</h3>
-                      <span>{tracks.length}</span>
+                      <h3>导入资源</h3>
+                      <span>{importedResources.length}</span>
                     </div>
-                    <div className="lossless-track-add-actions">
-                      <button type="button" onClick={pickAudioTrack} disabled={!videoInput}>
-                        <Music2 size={15} />
-                        添加声音
-                      </button>
-                      <button type="button" onClick={pickImageTrack} disabled={!videoInput}>
-                        <Sticker size={15} />
-                        添加图片
-                      </button>
+                    <div
+                      className={`lossless-resource-bin ${resourceDropActive ? "is-dragging" : ""}`}
+                      onDragEnter={(event) => {
+                        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setResourceDropActive(true);
+                      }}
+                      onDragOver={(event) => {
+                        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.dataTransfer.dropEffect = "copy";
+                        setResourceDropActive(true);
+                      }}
+                      onDragLeave={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setResourceDropActive(false);
+                      }}
+                      onDrop={handleResourceBinDrop}
+                    >
+                      <div className="lossless-resource-library-bar">
+                        <strong>全部</strong>
+                        <button type="button" onClick={pickResourceFiles} disabled={status === "detecting" || status === "exporting"}>
+                          <Plus size={14} />
+                          导入
+                        </button>
+                      </div>
+                      {importedResources.length ? (
+                        <div className="lossless-resource-grid">
+                          {importedResources.map((resource) => {
+                            const inUse = resource.type === "video"
+                              ? usedVideoSourceIds.has(resource.id)
+                              : usedMediaSourceIds.has(resource.id);
+                            const metadata = resource.type === "image"
+                              ? `${resource.width} × ${resource.height}`
+                              : formatCompactDuration(resource.duration);
+                            return (
+                              <div
+                                className={`lossless-resource-card is-${resource.type} ${inUse ? "is-used" : ""} ${selectedResourceId === resource.id ? "is-selected" : ""}`}
+                                key={`${resource.id}-resource`}
+                                draggable={status !== "detecting" && status !== "exporting"}
+                                tabIndex={0}
+                                title={`${resource.name} · 拖到时间轴，或双击添加到播放头`}
+                                onClick={() => setSelectedResourceId(resource.id)}
+                                onDoubleClick={(event) => {
+                                  if ((event.target as HTMLElement).closest("button")) return;
+                                  addImportedResourceToTimeline(resource.id);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Enter") return;
+                                  event.preventDefault();
+                                  addImportedResourceToTimeline(resource.id);
+                                }}
+                                onDragStart={(event) => {
+                                  setSelectedResourceId(resource.id);
+                                  event.dataTransfer.effectAllowed = "copy";
+                                  event.dataTransfer.setData(resourceDragMime, resource.id);
+                                  event.dataTransfer.setData("text/plain", resource.id);
+                                }}
+                                onDragEnd={() => setTimelineDropActive(false)}
+                              >
+                                <div className="lossless-resource-preview">
+                                  {resource.type === "image"
+                                    ? <img src={resource.previewUrl} alt="" draggable={false} />
+                                    : resource.type === "video"
+                                      ? resource.thumbnailUrl
+                                        ? <img src={resource.thumbnailUrl} alt="" draggable={false} />
+                                        : <FileVideo size={24} />
+                                      : <span className="lossless-resource-audio-preview"><Music2 size={24} /></span>}
+                                  {inUse ? <span className="lossless-resource-used-badge">已添加</span> : null}
+                                  {resource.type !== "image" ? <time>{metadata}</time> : null}
+                                  <div className="lossless-resource-card-actions">
+                                    <button
+                                      type="button"
+                                      title="添加到当前播放头"
+                                      aria-label={`把 ${resource.name} 添加到当前播放头`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        addImportedResourceToTimeline(resource.id);
+                                      }}
+                                      disabled={status === "detecting" || status === "exporting"}
+                                    >
+                                      <Plus size={13} />
+                                    </button>
+                                    <button
+                                      className="lossless-remove-track"
+                                      type="button"
+                                      title={inUse ? "资源正在时间轴中使用" : "从资源库移除"}
+                                      aria-label={`从资源库移除 ${resource.name}`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        removeImportedResource(resource);
+                                      }}
+                                      disabled={inUse || status === "detecting" || status === "exporting"}
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+                                <strong>{resource.name}</strong>
+                                <small>{resource.type === "video" ? "视频" : resource.type === "audio" ? "音频" : metadata}</small>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="lossless-resource-empty">
+                          <Layers3 size={20} />
+                          <span>拖入视频、图片或音频</span>
+                        </div>
+                      )}
                     </div>
                   </section>
 
-                  {selectedTrack ? (
+                  {selectedVideoClip ? (
+                    <section className="lossless-inspector-section">
+                      <div className="lossless-selected-track is-video">
+                        <div>
+                          <FileVideo size={16} />
+                          <span>
+                            <strong>{selectedVideoClip.name}</strong>
+                            <small>{formatSeconds(selectedVideoClip.start)} - {formatSeconds(selectedVideoClip.end)}</small>
+                          </span>
+                        </div>
+                        <button className="lossless-remove-track" type="button" title="删除视频片段" aria-label={`删除视频片段 ${selectedVideoClip.name}`} onClick={() => removeVideoClip(selectedVideoClip.id)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <h3>视频片段</h3>
+                      <label className="lossless-inspector-field">
+                        <span>时间轴范围</span>
+                        <span><b>{formatSeconds(selectedVideoClip.start)} - {formatSeconds(selectedVideoClip.end)}</b></span>
+                      </label>
+                      <label className="lossless-inspector-field">
+                        <span>源素材范围</span>
+                        <span><b>{formatSeconds(selectedVideoClip.sourceStart)} - {formatSeconds(selectedVideoClip.sourceEnd)}</b></span>
+                      </label>
+                      <div className="lossless-track-add-actions">
+                        <button type="button" onClick={splitSelectedVideoClip} disabled={!canSplitSelectedVideoClip}>
+                          <Scissors size={15} />
+                          播放头分割
+                        </button>
+                        <button type="button" onClick={() => removeVideoClip(selectedVideoClip.id)}>
+                          <Trash2 size={15} />
+                          删除片段
+                        </button>
+                      </div>
+                      <div className="lossless-export-boundary is-lossless">
+                        <ShieldCheck size={18} />
+                        <span>分割只记录源入点和出点，不会修改或复制原素材。</span>
+                      </div>
+                    </section>
+                  ) : selectedTrack ? (
                     <>
                       <section className="lossless-inspector-section">
                         <div className="lossless-selected-track">
@@ -2897,7 +3971,7 @@ export default function LosslessVideoPage() {
                         </label>
                         <label className="lossless-inspector-field">
                           <span>结束时间</span>
-                          <span><input type="number" min={selectedTrack.start + 0.05} max={selectedTrackLaneBounds?.maximumEnd ?? (duration || undefined)} step={0.01} value={Number(selectedTrack.end.toFixed(2))} onChange={(event) => updateTrackBoundary(selectedTrack.id, "end", Number(event.target.value || selectedTrack.end))} /><em>秒</em></span>
+                          <span><input type="number" min={selectedTrack.start + 0.05} max={selectedTrackLaneBounds?.maximumEnd ?? (projectVideoDuration || undefined)} step={0.01} value={Number(selectedTrack.end.toFixed(2))} onChange={(event) => updateTrackBoundary(selectedTrack.id, "end", Number(event.target.value || selectedTrack.end))} /><em>秒</em></span>
                         </label>
                         {selectedTrack.type === "image" ? (
                           <div className="lossless-switch-row">
@@ -3015,14 +4089,14 @@ export default function LosslessVideoPage() {
                         </section>
                       ) : null}
                     </>
-                  ) : (
+                  ) : videoClips.length + tracks.length > 0 || importedResources.length > 0 ? (
                     <section className="lossless-inspector-section">
                       <div className="lossless-track-empty">
                         <Layers3 size={21} />
-                        <span>{tracks.length ? "未选择时间轴素材" : "时间轴暂无素材"}</span>
+                        <span>{videoClips.length + tracks.length ? "未选择时间轴片段" : "将资源拖到时间轴"}</span>
                       </div>
                     </section>
-                  )}
+                  ) : null}
                 </div>
               ) : (
                 <div className="lossless-inspector-content lossless-export-inspector">
@@ -3128,7 +4202,10 @@ export default function LosslessVideoPage() {
                                   ? audioSeparationStatus.device || audioSeparationStatus.engine || "本地引擎"
                                   : "引擎不可用"}
                             </strong>
-                            <small>{audioSeparationStatus?.message || "正在读取运行环境与模型状态"}</small>
+                            <small>
+                              {audioSeparationStatus?.message || "正在读取运行环境与模型状态"}
+                              {audioSeparationStatus?.videoEncoder ? ` · 视频：${audioSeparationStatus.videoEncoder}` : ""}
+                            </small>
                           </span>
                           <button
                             className="lossless-icon-button"
@@ -3161,6 +4238,12 @@ export default function LosslessVideoPage() {
                               : "人声分离会重建并编码一次音频轨；视频轨仍按关键帧流拷贝。"
                           : hasImageTracks
                           ? "图片素材需要写入画面，视频轨将高质量重编码；音频轨会一并混合。"
+                          : needsVideoComposition
+                            ? "多视频轨或时间轴空档会按项目画布合成，并使用硬件加速高质量编码。"
+                          : hasExternalVideoSources
+                            ? "多个视频来源会统一到项目画布并使用硬件加速高质量编码，避免不同编码参数直接拼接造成损坏。"
+                          : videoClips.length === 0
+                            ? "当前没有视频素材，将生成项目画布并混合时间轴声音后高质量编码。"
                           : enabledTracks.length && mode === "keyframe-copy"
                             ? "仅合成声音轨时，视频画面保持流拷贝，音频会重新混合编码。"
                           : mode === "keyframe-copy"
@@ -3176,9 +4259,9 @@ export default function LosslessVideoPage() {
                     <h3>输出检查</h3>
                     <dl><dt>删除片段</dt><dd>{removableSegments.length}</dd></dl>
                     <dl><dt>非关键帧</dt><dd>{keyframeWarnings}</dd></dl>
-                    <dl><dt>输出时长</dt><dd>{duration ? formatSeconds(Math.max(0, duration - removeDuration)) : "--:--"}</dd></dl>
-                    <dl><dt>画面尺寸</dt><dd>保持原画</dd></dl>
-                    <dl><dt>时间轴素材</dt><dd>{enabledTracks.length}</dd></dl>
+                    <dl><dt>输出时长</dt><dd>{projectVideoDuration ? formatSeconds(Math.max(0, projectVideoDuration - removeDuration)) : "--:--"}</dd></dl>
+                    <dl><dt>画面尺寸</dt><dd>{`${Math.round(videoSize.width)} × ${Math.round(videoSize.height)}`}</dd></dl>
+                    <dl><dt>导入资源</dt><dd>{videoClips.length + enabledTracks.length}</dd></dl>
                     <dl><dt>声音处理</dt><dd>{audioSeparation.enabled ? audioSeparation.mode === "dialogue" ? "仅对白（去演唱）" : "全部人声（含演唱）" : "关闭"}</dd></dl>
                     {audioSeparation.enabled ? <dl><dt>处理质量</dt><dd>{audioSeparation.quality === "high" ? "高质量" : audioSeparation.quality === "fast" ? "快速" : "标准"}</dd></dl> : null}
                     {audioSeparation.enabled && audioSeparation.mode === "dialogue"
