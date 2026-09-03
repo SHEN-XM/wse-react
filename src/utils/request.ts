@@ -69,6 +69,16 @@ function notifyRequestError(title: string, message: string) {
   notify({ type: "error", title, message });
 }
 
+function readableRequestError(error: AxiosError<ApiResponse>) {
+  if (error.code === AxiosError.ERR_NETWORK || /^network error$/i.test(error.message || "")) {
+    return "无法连接后端服务，请确认 wse-check 已启动；上传大文件时请保持页面与后端持续运行";
+  }
+  if (error.code === AxiosError.ECONNABORTED) {
+    return "服务器响应超时，请确认后端任务仍在运行后重试";
+  }
+  return error.response?.data?.msg || error.message || "服务器请求失败";
+}
+
 service.interceptors.request.use((config) => {
   const token = getToken();
   config.headers = config.headers || {};
@@ -95,12 +105,16 @@ service.interceptors.response.use(
     return response;
   },
   (error: AxiosError<ApiResponse>) => {
+    if (error.code === AxiosError.ERR_CANCELED) {
+      return Promise.reject(error);
+    }
     if (error.response?.status === 401 || error.response?.status === 403) {
       clearAuth();
       notify({ type: "warning", title: "无权访问", message: "请重新登录或联系管理员开通权限" });
       window.location.replace(loginRedirectUrl());
     } else {
-      const message = error.response?.data?.msg || error.message || "服务器请求失败";
+      const message = readableRequestError(error);
+      error.message = message;
       notifyRequestError("请求失败", message);
     }
     return Promise.reject(error);
@@ -109,6 +123,10 @@ service.interceptors.response.use(
 
 export function postReq<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) {
   return service.post<ApiResponse<T>>(url, data, config).then((response) => response.data);
+}
+
+export function postBlobReq(url: string, data?: unknown, config?: AxiosRequestConfig) {
+  return service.post<Blob>(url, data, { ...config, responseType: "blob" }).then((response) => response.data);
 }
 
 export function putReq<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) {

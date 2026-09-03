@@ -1051,6 +1051,15 @@ input {
   border-color: var(--color-green);
 }
 
+.table-switch:hover:not(:disabled) {
+  background: var(--bg-color-light);
+}
+
+.table-switch.is-on:hover:not(:disabled) {
+  background: var(--color-green);
+  border-color: var(--color-green);
+}
+
 .table-switch.is-on::before {
   content: "开";
   left: 10px;
@@ -5098,7 +5107,7 @@ input {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(220px, 1fr) auto 210px;
+  grid-template-rows: minmax(220px, 1fr) auto 360px;
   overflow: hidden;
   background: var(--card-bg);
 }
@@ -5122,7 +5131,7 @@ input {
   justify-content: space-between;
   gap: 12px;
   padding: 0 10px;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .lossless-preview {
@@ -5131,22 +5140,32 @@ input {
   min-height: 0;
   margin: 0;
   border: 0;
-  background: #000000;
+  background: var(--bg-color-light);
   display: grid;
   place-items: center;
   overflow: hidden;
 }
 
-.lossless-preview video {
+.lossless-video-stage {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-  object-position: center;
+  overflow: hidden;
   background: #000000;
+}
+
+.lossless-video-stage > video {
+  position: absolute;
+  display: block;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  object-position: center;
+  transform-origin: center;
+  background: transparent;
   cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  will-change: left, top, width, height, transform;
+  backface-visibility: hidden;
 }
 
 .lossless-preview-canvas {
@@ -5161,6 +5180,160 @@ input {
   z-index: 2;
   pointer-events: none;
   overflow: hidden;
+}
+
+.lossless-canvas-snap-guide {
+  position: absolute;
+  z-index: 120;
+  display: none;
+  pointer-events: none;
+  background: var(--color-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 32%, transparent);
+}
+
+.lossless-canvas-snap-guide.is-visible {
+  display: block;
+}
+
+.lossless-canvas-snap-guide.is-vertical {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+.lossless-canvas-snap-guide.is-horizontal {
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.lossless-video-filter-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.lossless-global-effect-preview {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.lossless-global-effect-preview.is-snow circle {
+  fill: #f7fbff;
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.72));
+}
+
+.lossless-global-effect-preview.is-particles circle {
+  fill: #ffd476;
+  filter: drop-shadow(0 0 1.5px rgba(255, 176, 69, 0.72));
+}
+
+.lossless-local-effect-preview {
+  position: absolute;
+  z-index: 39;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  transform: translate3d(-50%, -50%, 0);
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
+  overflow: visible;
+}
+
+.lossless-local-effect-preview.is-mosaic {
+  background-image:
+    linear-gradient(90deg, color-mix(in srgb, var(--text-color) 12%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--text-color) 12%, transparent) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+
+.lossless-local-effect-preview.is-selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 72%, transparent);
+}
+
+.lossless-local-effect-resize {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 13px;
+  min-width: 13px;
+  height: 13px;
+  min-height: 13px;
+  padding: 0;
+  border: 1px solid var(--text-color);
+  border-radius: 1px;
+  background: var(--card-bg);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.lossless-video-transform-overlay {
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 8px;
+  min-height: 8px;
+  border: 1px solid var(--text-color);
+  background: transparent;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  transform-origin: center;
+  will-change: left, top, width, height, transform;
+}
+
+.lossless-video-transform-overlay:active {
+  cursor: grabbing;
+}
+
+.lossless-video-transform-handle {
+  position: absolute;
+  z-index: 2;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  min-height: 14px;
+  margin: 0;
+  border: 1px solid var(--text-color);
+  border-radius: 1px;
+  background: var(--card-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 70%, transparent);
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.lossless-video-transform-handle.is-nw {
+  top: -9px;
+  left: -9px;
+  cursor: nwse-resize;
+}
+
+.lossless-video-transform-handle.is-ne {
+  top: -9px;
+  right: -9px;
+  cursor: nesw-resize;
+}
+
+.lossless-video-transform-handle.is-se {
+  right: -9px;
+  bottom: -9px;
+  cursor: nwse-resize;
+}
+
+.lossless-video-transform-handle.is-sw {
+  bottom: -9px;
+  left: -9px;
+  cursor: nesw-resize;
 }
 
 .lossless-image-motion-path {
@@ -5254,7 +5427,7 @@ input {
 }
 
 .lossless-image-overlay.is-selected {
-  outline: 2px solid color-mix(in srgb, var(--color-primary) 88%, #ffffff);
+  outline: 2px solid color-mix(in srgb, var(--text-color) 88%, #ffffff);
   outline-offset: 2px;
 }
 
@@ -5276,7 +5449,7 @@ input {
   position: absolute;
   z-index: 2;
   margin: 0;
-  border: 1px solid var(--color-primary);
+  border: 1px solid var(--text-color);
   background: var(--card-bg);
   color: var(--color-primary);
   padding: 0;
@@ -5583,12 +5756,10 @@ input {
   justify-content: center;
 }
 
-.lossless-timeline-track-actions span {
-  min-width: 0;
-  color: var(--text-color-secend);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.lossless-timeline-track-actions button.is-active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
 .lossless-timeline-transport {
@@ -5619,6 +5790,19 @@ input {
   align-items: center;
   justify-self: end;
   gap: 10px;
+}
+
+.lossless-project-aspect-control {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-color-secend);
+}
+
+.lossless-project-aspect-select.app-select {
+  width: 106px;
+  min-width: 106px !important;
 }
 
 .lossless-timeline-zoom-control {
@@ -5652,6 +5836,11 @@ input {
 
   .lossless-timeline-toolbar-end {
     gap: 8px;
+  }
+
+  .lossless-project-aspect-select.app-select {
+    width: 96px;
+    min-width: 96px !important;
   }
 
   .lossless-timeline-zoom-control {
@@ -5736,7 +5925,7 @@ input {
   z-index: 0;
   inset: 0 auto 0 0;
   border-bottom: 2px solid var(--color-primary);
-  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
+  background: transparent;
   pointer-events: none;
 }
 
@@ -5841,20 +6030,24 @@ input {
 }
 
 .lossless-candidate-track {
-  top: 34px;
-  border: 1px solid var(--border-color);
-  background: var(--card-bg);
+  z-index: 4;
+  top: 29px;
+  height: 4px;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
 }
 
 .lossless-candidate-track button {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 0;
+  bottom: 0;
   min-width: 3px;
   padding: 0;
   border-radius: 0;
   border: 0;
   opacity: 0.95;
+  pointer-events: auto;
 }
 
 .lossless-candidate-track button.is-repeat {
@@ -5875,7 +6068,7 @@ input {
   position: absolute;
   left: 0;
   right: 0;
-  height: 28px;
+  height: 56px;
   border: 1px solid var(--border-color);
   background: var(--card-bg);
   overflow: hidden;
@@ -5885,12 +6078,73 @@ input {
   border-color: var(--color-primary);
 }
 
+.lossless-media-track-row.is-drop-target {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--card-bg));
+}
+
+.lossless-lane-drop-indicator {
+  position: absolute;
+  z-index: 9;
+  left: 0;
+  right: 0;
+  display: none;
+  height: 2px;
+  background: var(--color-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
+  pointer-events: none;
+}
+
+.lossless-lane-drop-indicator::before {
+  content: "+";
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: var(--card-bg);
+  background: var(--color-primary);
+  display: grid;
+  place-items: center;
+  font: 12px/1 system-ui, sans-serif;
+  transform: translateY(-50%);
+}
+
+.lossless-blade-guide {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  bottom: 0;
+  display: none;
+  width: 1px;
+  background: var(--color-danger);
+  box-shadow: none;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.lossless-timeline-content.is-blade-tool .lossless-blade-guide.is-visible {
+  display: block;
+}
+
+.lossless-blade-guide::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 8px;
+  height: 3px;
+  background: var(--color-danger);
+  transform: translateX(-50%);
+}
+
 .lossless-media-track-clip {
   position: absolute;
   top: 2px;
   bottom: 2px;
   min-width: 18px;
-  min-height: 22px;
+  min-height: 50px;
   border: 0;
   border-radius: 1px;
   padding: 0 6px;
@@ -5904,8 +6158,34 @@ input {
   user-select: none;
 }
 
+.lossless-media-track-clip.is-video-clip {
+  padding-inline: 11px;
+}
+
+.lossless-timeline-content.is-blade-tool,
+.lossless-timeline-content.is-blade-tool .lossless-media-track-clip,
+.lossless-timeline-content.is-blade-tool .lossless-media-track-clip:active {
+  cursor: crosshair;
+}
+
+.lossless-timeline-content.is-blade-tool .lossless-media-track-handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .lossless-media-track-clip:active {
   cursor: grabbing;
+}
+
+.lossless-media-track-clip.is-dragging {
+  z-index: 5;
+  opacity: 0.9;
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.lossless-media-track-clip.is-trimming,
+.lossless-media-track-clip.is-trimming:active {
+  cursor: ew-resize;
 }
 
 .lossless-media-track-handle {
@@ -5913,7 +6193,7 @@ input {
   z-index: 3;
   top: 0;
   bottom: 0;
-  width: 7px;
+  width: 9px;
   background: color-mix(in srgb, var(--card-bg) 72%, transparent);
   opacity: 0;
   cursor: ew-resize;
@@ -5934,7 +6214,7 @@ input {
 }
 
 .lossless-media-track-handle.is-start::after {
-  left: 3px;
+  left: 4px;
 }
 
 .lossless-media-track-handle.is-end {
@@ -5942,7 +6222,7 @@ input {
 }
 
 .lossless-media-track-handle.is-end::after {
-  right: 3px;
+  right: 4px;
 }
 
 .lossless-media-track-clip:hover .lossless-media-track-handle,
@@ -5950,9 +6230,39 @@ input {
   opacity: 1;
 }
 
+.lossless-media-track-clip.is-selected .lossless-media-track-handle {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 18%, var(--card-bg));
+}
+
 .lossless-media-track-row.is-audio .lossless-media-track-clip {
   background: color-mix(in srgb, var(--color-green) 25%, var(--card-bg));
   box-shadow: none;
+}
+
+.lossless-media-track-row.is-audio .lossless-media-track-clip > svg,
+.lossless-media-track-row.is-audio .lossless-media-track-clip > span:not(.lossless-audio-track-waveform) {
+  position: relative;
+  z-index: 2;
+}
+
+.lossless-audio-track-waveform {
+  position: absolute;
+  z-index: 1;
+  inset: 2px 0;
+  display: block;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--color-green) 74%, var(--text-color));
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.lossless-audio-track-waveform svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  fill: none;
+  shape-rendering: geometricPrecision;
 }
 
 .lossless-media-track-row.is-video .lossless-media-track-clip {
@@ -5963,6 +6273,72 @@ input {
 .lossless-media-track-row.is-image .lossless-media-track-clip {
   background: color-mix(in srgb, var(--color-primary) 20%, var(--card-bg));
   box-shadow: none;
+}
+
+.lossless-media-track-row.is-effect .lossless-media-track-clip {
+  background: color-mix(in srgb, var(--color-warning) 22%, var(--card-bg));
+  box-shadow: none;
+}
+
+.lossless-media-track-row.is-effect .lossless-media-track-clip.is-snow {
+  background: color-mix(in srgb, var(--color-primary) 20%, var(--card-bg));
+}
+
+.lossless-media-track-row.is-effect .lossless-media-track-clip.is-blur {
+  background: color-mix(in srgb, var(--color-green) 18%, var(--card-bg));
+}
+
+.lossless-media-track-row.is-effect .lossless-media-track-clip.is-mosaic {
+  background: color-mix(in srgb, var(--text-color-secend) 20%, var(--card-bg));
+}
+
+.lossless-effect-drop-preview {
+  position: absolute;
+  z-index: 6;
+  top: 2px;
+  bottom: 2px;
+  min-width: 18px;
+  padding: 0 7px;
+  border: 1px dashed var(--text-color);
+  border-radius: 1px;
+  color: var(--text-color);
+  background: color-mix(in srgb, var(--text-color) 12%, var(--card-bg));
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.lossless-effect-drop-preview.is-invalid {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, var(--card-bg));
+}
+
+.lossless-effect-drop-preview span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.lossless-effect-drop-preview small {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.lossless-timeline-content.is-effect-dragging .lossless-media-track-row.is-effect.is-drop-target {
+  border-color: var(--text-color);
+  background: color-mix(in srgb, var(--text-color) 7%, var(--card-bg));
+}
+
+.lossless-timeline-content.is-invalid-effect-drop .lossless-media-track-row.is-effect.is-drop-target {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 7%, var(--card-bg));
 }
 
 .lossless-media-track-clip.is-selected {
@@ -5983,6 +6359,91 @@ input {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.lossless-media-track-duration {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-color-secend);
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.lossless-media-track-clip.is-video-clip.has-embedded-audio {
+  align-items: flex-start;
+  padding-top: 3px;
+  padding-bottom: 27px;
+}
+
+.lossless-media-track-clip.is-video-clip.has-embedded-audio > svg,
+.lossless-media-track-clip.is-video-clip.has-embedded-audio > span:not(.lossless-video-audio-strip),
+.lossless-media-track-clip.is-video-clip.has-embedded-audio > .lossless-media-track-duration {
+  position: relative;
+  z-index: 1;
+  line-height: 14px;
+}
+
+.lossless-media-track-clip .lossless-video-audio-strip {
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  display: block;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-color) 72%, var(--color-green));
+  background: color-mix(in srgb, var(--color-green) 32%, var(--card-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-green) 42%, var(--border-color));
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.lossless-video-audio-strip svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  fill: none;
+  shape-rendering: geometricPrecision;
+  pointer-events: none;
+}
+
+.lossless-video-waveform-area {
+  fill: currentColor;
+  stroke: none;
+  opacity: 0.38;
+}
+
+.lossless-video-waveform-line {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 88%, var(--text-color));
+  stroke-width: 0.55;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.98;
+}
+
+.lossless-video-waveform-center {
+  stroke: color-mix(in srgb, currentColor 58%, transparent);
+  stroke-width: 0.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.lossless-video-volume-line {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  height: 1px;
+  display: block;
+  background: var(--color-warning);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-warning) 18%, transparent);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .lossless-keyframe-point {
@@ -6014,20 +6475,42 @@ input {
   z-index: 4;
   top: 20px;
   bottom: 0;
-  width: 1px;
-  background: var(--color-primary);
-  pointer-events: none;
+  width: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  outline: 0;
+  box-shadow: none;
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  touch-action: none;
+  will-change: left;
 }
 
 .lossless-playhead::before {
   content: "";
   position: absolute;
   top: 0;
-  left: -4px;
+  bottom: 0;
+  left: 50%;
   width: 9px;
-  height: 7px;
+  transform: translateX(-50%);
   background: var(--color-primary);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  clip-path: polygon(0 0, 100% 0, 55.56% 7px, 55.56% 100%, 44.44% 100%, 44.44% 7px);
+}
+
+.lossless-playhead::after {
+  content: none;
+}
+
+.lossless-playhead:hover,
+.lossless-playhead:focus,
+.lossless-playhead:focus-visible,
+.lossless-playhead:active {
+  background: transparent;
+  outline: 0;
+  box-shadow: none;
 }
 
 .lossless-inspector {
@@ -6047,8 +6530,12 @@ input {
 
 .lossless-detect-inspector {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
+}
+
+.lossless-apply-detections-action {
+  margin-top: 10px;
 }
 
 .lossless-export-inspector {
@@ -6202,7 +6689,7 @@ input {
 
 .lossless-resource-card:focus-visible .lossless-resource-preview,
 .lossless-resource-card.is-selected .lossless-resource-preview {
-  border-color: var(--color-primary);
+  border-color: var(--text-color);
 }
 
 .lossless-resource-card > strong,
@@ -6273,43 +6760,13 @@ input {
 .lossless-resource-used-badge {
   left: 4px;
   color: #ffffff;
-  background: color-mix(in srgb, var(--color-primary) 88%, #000000);
+  background: color-mix(in srgb, var(--color-green) 88%, #000000);
 }
 
 .lossless-resource-preview > time {
   right: 4px;
   color: #ffffff;
   background: rgba(0, 0, 0, 0.62);
-}
-
-.lossless-resource-card-actions {
-  position: absolute;
-  z-index: 3;
-  right: 4px;
-  bottom: 4px;
-  display: inline-flex;
-  gap: 3px;
-  opacity: 0;
-  transition: opacity 100ms ease;
-}
-
-.lossless-resource-card:hover .lossless-resource-card-actions,
-.lossless-resource-card:focus-within .lossless-resource-card-actions,
-.lossless-resource-card.is-selected .lossless-resource-card-actions {
-  opacity: 1;
-}
-
-.lossless-resource-card-actions > button {
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.34);
-  background: rgba(0, 0, 0, 0.68);
-  display: grid;
-  place-items: center;
 }
 
 .lossless-resource-empty {
@@ -6325,67 +6782,69 @@ input {
   pointer-events: none;
 }
 
-.lossless-selected-track {
-  min-width: 0;
-  min-height: 46px;
-  margin: -2px 0 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 66px 28px;
-  align-items: center;
-  gap: 6px;
-}
-
-.lossless-selected-track.is-video {
-  grid-template-columns: minmax(0, 1fr) 28px;
-}
-
-.lossless-selected-track > div {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-}
-
-.lossless-selected-track > div > span {
-  min-width: 0;
+.lossless-media-context-menu {
+  position: fixed;
+  z-index: 7000;
+  width: 120px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  color: var(--text-color);
+  background: var(--card-bg);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
   display: grid;
   gap: 1px;
+  font-size: 12px;
 }
 
-.lossless-selected-track strong,
-.lossless-selected-track small {
+.lossless-media-context-menu > button {
+  width: 100%;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 2px;
+  color: var(--text-color);
+  background: transparent;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  line-height: 1;
+  text-align: left;
+}
+
+.lossless-media-context-menu > button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.lossless-media-context-menu > button:hover:not(:disabled),
+.lossless-media-context-menu > button:focus-visible {
+  color: var(--text-color);
+  background: var(--menu-hover);
+}
+
+.lossless-media-context-menu > button.is-danger {
+  color: var(--color-danger);
+}
+
+.lossless-media-context-menu > button:disabled {
+  opacity: 0.42;
+}
+
+.lossless-media-context-menu > button > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.lossless-selected-track strong {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.lossless-selected-track small {
-  color: var(--text-color-secend);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.lossless-selected-track > .app-switch {
-  width: 66px;
-  justify-self: end;
-}
-
-.lossless-selected-track > .lossless-remove-track {
-  width: 27px;
-  min-width: 27px;
-  height: 27px;
-  min-height: 27px;
-  padding: 0;
-  color: var(--color-danger);
-  display: grid;
-  place-items: center;
+.lossless-media-context-menu > i {
+  height: 1px;
+  margin: 1px 3px;
+  background: var(--border-color);
 }
 
 .lossless-track-empty {
@@ -6405,17 +6864,364 @@ input {
   grid-template-columns: 68px minmax(0, 1fr) 48px;
   align-items: center;
   gap: 7px;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .lossless-slider-field input {
   width: 100%;
-  accent-color: var(--color-primary);
+  accent-color: var(--text-color);
 }
 
 .lossless-slider-field em {
   color: var(--text-color-secend);
   font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-db-slider-field {
+  grid-template-columns: 68px minmax(0, 1fr) 78px;
+}
+
+.lossless-db-value {
+  position: relative;
+  min-width: 0;
+  display: block;
+}
+
+.lossless-db-value input {
+  width: 100%;
+  height: 28px;
+  padding: 0 25px 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  color: var(--text-color);
+  background: var(--card-bg);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.lossless-db-value em {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 11px;
+}
+
+.lossless-video-color-inspector .lossless-section-title-row h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lossless-color-wheel-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 10px;
+}
+
+.lossless-color-wheel-control {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.lossless-color-wheel-title {
+  width: 100%;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.lossless-color-wheel-title strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lossless-color-wheel-title button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-color-secend);
+  display: grid;
+  place-items: center;
+}
+
+.lossless-color-wheel {
+  position: relative;
+  width: min(104px, 100%);
+  min-width: 82px;
+  aspect-ratio: 1;
+  border: 1px solid var(--text-color-secend);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, color-mix(in srgb, var(--card-bg) 96%, transparent) 0 7%, transparent 58%, color-mix(in srgb, #000000 28%, transparent) 100%),
+    conic-gradient(from 90deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+  box-shadow: inset 0 0 0 1px var(--shadow);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.lossless-color-wheel::before,
+.lossless-color-wheel::after {
+  content: "";
+  position: absolute;
+  background: color-mix(in srgb, var(--text-color-secend) 34%, transparent);
+  pointer-events: none;
+}
+
+.lossless-color-wheel::before {
+  top: 50%;
+  left: 5%;
+  right: 5%;
+  height: 1px;
+}
+
+.lossless-color-wheel::after {
+  top: 5%;
+  bottom: 5%;
+  left: 50%;
+  width: 1px;
+}
+
+.lossless-color-wheel > i {
+  position: absolute;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  border: 1px solid #ffffff;
+  border-radius: 50%;
+  background: #111111;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.lossless-color-master {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-color-secend);
+  font-size: 10px;
+}
+
+.lossless-color-master input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--text-color);
+}
+
+.lossless-color-master em {
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-color-saturation {
+  margin-top: 10px;
+}
+
+.lossless-effects-inspector {
+  overscroll-behavior: contain;
+}
+
+.lossless-effect-library {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.lossless-effect-library > button {
+  min-width: 0;
+  height: 50px;
+  min-height: 50px;
+  padding: 0 9px;
+  border-radius: 2px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+}
+
+.lossless-effect-library > button[draggable="true"] {
+  cursor: grab;
+  user-select: none;
+}
+
+.lossless-effect-library > button[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.lossless-effect-library > button > span {
+  width: 28px;
+  height: 28px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-warning) 18%, var(--bg-color-light));
+  color: var(--color-warning);
+  display: grid;
+  place-items: center;
+}
+
+.lossless-effect-library > button > span.is-snow {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--bg-color-light));
+}
+
+.lossless-effect-library > button > span.is-blur {
+  color: var(--color-green);
+  background: color-mix(in srgb, var(--color-green) 14%, var(--bg-color-light));
+}
+
+.lossless-effect-library strong,
+.lossless-effect-library small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-effect-library strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lossless-effect-library small {
+  color: var(--text-color-secend);
+  font-size: 10px;
+}
+
+.lossless-effect-list {
+  margin-top: 7px;
+  display: grid;
+  gap: 4px;
+}
+
+.lossless-effect-list > button {
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 8px;
+  border-color: transparent;
+  background: transparent;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+}
+
+.lossless-effect-list > button:hover:not(:disabled),
+.lossless-effect-list > button.is-selected {
+  border-color: var(--border-color);
+  color: var(--text-color);
+  background: var(--menu-active);
+}
+
+.lossless-effect-list > button > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.lossless-effect-list strong,
+.lossless-effect-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-effect-list strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lossless-effect-list small,
+.lossless-effect-list em {
+  color: var(--text-color-secend);
+  font-size: 10px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-effect-time-fields {
+  margin-top: 7px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.lossless-effect-time-fields > label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--text-color-secend);
+  font-size: 11px;
+}
+
+.lossless-effect-time-fields > label > span:last-child {
+  position: relative;
+  display: block;
+}
+
+.lossless-effect-time-fields input {
+  width: 100%;
+  height: 28px;
+  padding: 0 22px 0 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-effect-time-fields em {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  color: var(--text-color-secend);
+  font-size: 10px;
+  font-style: normal;
+  pointer-events: none;
+}
+
+.lossless-effect-mask-fields {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.lossless-effect-mask-fields > strong {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lossless-effect-mask-fields label {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: var(--text-color-secend);
+  font-size: 10px;
+}
+
+.lossless-effect-mask-fields input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -6559,7 +7365,7 @@ input {
 .lossless-transform-row input[type="range"] {
   width: 100%;
   min-width: 0;
-  accent-color: var(--color-primary);
+  accent-color: var(--text-color);
 }
 
 .lossless-transform-row.is-easing {
@@ -6992,7 +7798,7 @@ input {
   }
 
   .lossless-editor {
-    grid-template-rows: minmax(190px, 1fr) auto 170px;
+    grid-template-rows: minmax(190px, 1fr) auto 300px;
   }
 
   .lossless-timeline {
@@ -7118,6 +7924,89 @@ input {
 
 .cover-maker-canvas-frame.is-panning canvas {
   cursor: grabbing;
+}
+
+.cover-maker-tag-selection {
+  position: absolute;
+  z-index: 4;
+  box-sizing: border-box;
+  border: 1px solid var(--color-primary);
+  border-radius: 2px;
+  pointer-events: none;
+  transform-origin: center;
+}
+
+.cover-maker-tag-resize-handle {
+  position: absolute;
+  z-index: 1;
+  width: 12px;
+  min-width: 12px;
+  height: 12px;
+  min-height: 12px;
+  margin: 0;
+  border: 1px solid var(--text-color);
+  border-radius: 1px;
+  padding: 0;
+  background: var(--card-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 70%, transparent);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.cover-maker-tag-resize-handle:hover,
+.cover-maker-tag-resize-handle:focus-visible,
+.cover-maker-tag-resize-handle:active {
+  border-color: var(--text-color);
+  background: var(--card-bg);
+  outline: 0;
+}
+
+.cover-maker-tag-resize-handle.is-nw {
+  top: -7px;
+  left: -7px;
+  cursor: nwse-resize;
+}
+
+.cover-maker-tag-resize-handle.is-ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+
+.cover-maker-tag-resize-handle.is-n {
+  top: -7px;
+  left: calc(50% - 6px);
+  cursor: ns-resize;
+}
+
+.cover-maker-tag-resize-handle.is-e {
+  top: calc(50% - 6px);
+  right: -7px;
+  cursor: ew-resize;
+}
+
+.cover-maker-tag-resize-handle.is-se {
+  right: -7px;
+  bottom: -7px;
+  cursor: nwse-resize;
+}
+
+.cover-maker-tag-resize-handle.is-sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+
+.cover-maker-tag-resize-handle.is-s {
+  bottom: -7px;
+  left: calc(50% - 6px);
+  cursor: ns-resize;
+}
+
+.cover-maker-tag-resize-handle.is-w {
+  top: calc(50% - 6px);
+  left: -7px;
+  cursor: ew-resize;
 }
 
 .cover-maker-grid,
@@ -7302,7 +8191,7 @@ input {
 .cover-maker-zoom-row input,
 .cover-maker-quality input {
   width: 100%;
-  accent-color: var(--color-primary);
+  accent-color: var(--text-color);
 }
 
 .cover-maker-wide-button,
@@ -7456,7 +8345,7 @@ input {
 
 .cover-maker-tag-range > input[type="range"] {
   width: 100%;
-  accent-color: var(--color-primary);
+  accent-color: var(--text-color);
 }
 
 .cover-maker-tag-number {
@@ -10154,4 +11043,638 @@ input {
     width: 100%;
     max-height: 220px;
   }
+}
+
+/* Video editor subtitles */
+.lossless-subtitle-preview {
+  position: absolute;
+  z-index: 80;
+  box-sizing: border-box;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  line-height: 1.28;
+  letter-spacing: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  paint-order: stroke fill;
+  box-shadow: none;
+  transition: none;
+}
+
+.lossless-subtitle-preview:active {
+  cursor: grabbing;
+}
+
+.lossless-subtitle-preview:hover,
+.lossless-subtitle-preview:focus,
+.lossless-subtitle-preview:focus-visible,
+.lossless-subtitle-preview:active {
+  color: inherit;
+  border-color: transparent;
+  background: inherit;
+  outline: 0;
+  box-shadow: none;
+}
+
+.lossless-subtitle-preview.is-selected {
+  border-color: var(--color-primary);
+}
+
+.lossless-subtitle-transform-handle {
+  position: absolute;
+  z-index: 2;
+  width: 12px;
+  min-width: 12px;
+  height: 12px;
+  min-height: 12px;
+  margin: 0;
+  border: 1px solid var(--text-color);
+  border-radius: 1px;
+  padding: 0;
+  background: var(--card-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 70%, transparent);
+  touch-action: none;
+}
+
+.lossless-subtitle-transform-handle:hover,
+.lossless-subtitle-transform-handle:focus-visible,
+.lossless-subtitle-transform-handle:active {
+  border-color: var(--text-color);
+  background: var(--card-bg);
+  outline: 0;
+}
+
+.lossless-subtitle-transform-handle.is-nw {
+  top: -7px;
+  left: -7px;
+  cursor: nwse-resize;
+}
+
+.lossless-subtitle-transform-handle.is-ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+
+.lossless-subtitle-transform-handle.is-e {
+  top: 50%;
+  right: -7px;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.lossless-subtitle-transform-handle.is-se {
+  right: -7px;
+  bottom: -7px;
+  cursor: nwse-resize;
+}
+
+.lossless-subtitle-transform-handle.is-sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+
+.lossless-subtitle-transform-handle.is-w {
+  top: 50%;
+  left: -7px;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.lossless-media-track-row.is-subtitle .lossless-media-track-clip {
+  background: color-mix(in srgb, var(--text-color-secend) 16%, var(--card-bg));
+  box-shadow: inset -1px 0 var(--border-color);
+}
+
+.lossless-media-track-row.is-subtitle .lossless-media-track-clip.is-low-confidence {
+  background: color-mix(in srgb, var(--color-warning) 17%, var(--card-bg));
+}
+
+.lossless-media-track-row.is-subtitle .lossless-media-track-clip.is-low-confidence::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--color-warning);
+  pointer-events: none;
+}
+
+.lossless-media-track-clip.is-subtitle-clip {
+  min-width: 0;
+  padding: 3px 2px 4px;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.lossless-subtitle-clip-glyph {
+  position: absolute;
+  inset: 4px 0 14px;
+  width: 100%;
+  height: calc(100% - 18px);
+  color: color-mix(in srgb, var(--text-color) 58%, transparent);
+  pointer-events: none;
+}
+
+.lossless-media-track-clip .lossless-subtitle-clip-label {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  font-size: 10px;
+  line-height: 12px;
+}
+
+.lossless-subtitle-confidence {
+  position: absolute;
+  z-index: 3;
+  top: 3px;
+  right: 5px;
+  color: var(--text-color-secend);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-subtitle-inspector {
+  overscroll-behavior: contain;
+}
+
+.lossless-subtitle-select-row,
+.lossless-subtitle-font-row {
+  min-height: 36px;
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text-color-secend);
+  font-size: 13px;
+}
+
+.lossless-subtitle-select-row .app-select,
+.lossless-subtitle-list-section .app-select,
+.lossless-subtitle-option-grid .app-select {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.lossless-subtitle-select-row .app-select-trigger,
+.lossless-subtitle-list-section .app-select-trigger,
+.lossless-subtitle-option-grid .app-select-trigger {
+  width: 100%;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.lossless-subtitle-option-grid {
+  margin-top: 7px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.lossless-subtitle-property-list {
+  margin-top: 8px;
+  display: grid;
+  gap: 7px;
+}
+
+.lossless-subtitle-property-row {
+  min-width: 0;
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-subtitle-property-row.is-slider {
+  grid-template-columns: 38px minmax(70px, 1fr) 48px;
+}
+
+.lossless-subtitle-property-row .app-select,
+.lossless-subtitle-property-row .app-select-trigger {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.lossless-subtitle-property-row .app-select-trigger {
+  height: 28px;
+  min-height: 28px;
+}
+
+.lossless-subtitle-property-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--text-color);
+}
+
+.lossless-editor-select.app-select {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.lossless-editor-select .app-select-trigger {
+  height: 26px;
+  min-height: 26px;
+  gap: 5px;
+  padding: 0 6px 0 8px;
+  font-size: 12px;
+}
+
+.lossless-editor-select .app-select-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
+.lossless-editor-select-menu {
+  padding: 2px;
+  font-size: 13px;
+  scrollbar-width: thin;
+}
+
+.lossless-editor-select-menu button {
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.lossless-subtitle-property-row input[type="number"] {
+  width: 48px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 0 4px;
+  color: var(--text-color);
+  background: var(--card-bg);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-subtitle-style-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lossless-subtitle-style-buttons button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 2px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lossless-subtitle-style-buttons button:nth-child(2) {
+  text-decoration: underline;
+}
+
+.lossless-subtitle-style-buttons button:nth-child(3) {
+  font-style: italic;
+}
+
+.lossless-subtitle-style-buttons button.is-active {
+  border-color: var(--text-color);
+  color: var(--card-bg);
+  background: var(--text-color);
+}
+
+.lossless-subtitle-color-control {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lossless-subtitle-color-control input[type="color"] {
+  width: 86px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 2px 4px;
+  background: var(--card-bg);
+  cursor: pointer;
+}
+
+.lossless-subtitle-color-control code {
+  color: var(--text-color-secend);
+  font-size: 11px;
+}
+
+.lossless-subtitle-property-list.is-secondary {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-color);
+}
+
+.lossless-subtitle-property-list.is-secondary .lossless-subtitle-property-row {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.lossless-subtitle-property-list.is-secondary .lossless-subtitle-property-row.is-slider {
+  grid-template-columns: 58px minmax(70px, 1fr) 48px;
+}
+
+.lossless-subtitle-language-row {
+  width: 100%;
+  margin-top: 7px;
+}
+
+.lossless-subtitle-language-row > label {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-subtitle-language-row .app-select,
+.lossless-subtitle-language-row .app-select-trigger {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.lossless-subtitle-option-grid > label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-subtitle-option-grid input,
+.lossless-subtitle-font-row input,
+.lossless-subtitle-time-fields input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 0 7px;
+  color: var(--text-color);
+  background: var(--card-bg);
+}
+
+.lossless-subtitle-option-grid label.is-color input {
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.lossless-subtitle-hotwords,
+.lossless-subtitle-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.lossless-subtitle-hotwords {
+  margin-top: 8px;
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-subtitle-hotwords textarea,
+.lossless-subtitle-editor textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 7px 8px;
+  color: var(--text-color);
+  background: var(--card-bg);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.lossless-subtitle-hotwords textarea:focus,
+.lossless-subtitle-editor textarea:focus,
+.lossless-subtitle-option-grid input:focus,
+.lossless-subtitle-font-row input:focus,
+.lossless-subtitle-time-fields input:focus {
+  border-color: var(--text-color);
+  outline: 1px solid var(--text-color);
+  outline-offset: -1px;
+}
+
+.lossless-subtitle-toolbar {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lossless-subtitle-toolbar button {
+  min-height: 30px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.lossless-subtitle-list-section .lossless-section-title-row .app-select {
+  width: 178px;
+}
+
+.lossless-subtitle-track-bar {
+  min-height: 0;
+}
+
+.lossless-subtitle-cue-list {
+  max-height: 270px;
+  margin-top: 5px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.lossless-subtitle-cue-list > button {
+  min-width: 0;
+  min-height: 43px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 5px 7px;
+  color: var(--text-color);
+  background: transparent;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+}
+
+.lossless-subtitle-cue-list > button:hover,
+.lossless-subtitle-cue-list > button:focus-visible {
+  border-color: var(--border-color);
+  color: var(--text-color);
+  background: var(--bg-color-light);
+}
+
+.lossless-subtitle-cue-list > button.is-selected {
+  border-color: var(--text-color);
+  background: var(--bg-color-light);
+}
+
+.lossless-subtitle-cue-list > button.is-low-confidence > em {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.lossless-subtitle-cue-list time,
+.lossless-subtitle-cue-list em {
+  color: var(--text-color-secend);
+  font-size: 10px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-subtitle-cue-list > button > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lossless-subtitle-cue-list strong,
+.lossless-subtitle-cue-list small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-subtitle-cue-list strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lossless-subtitle-cue-list small {
+  color: var(--text-color-secend);
+  font-size: 10px;
+}
+
+.lossless-subtitle-time-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.lossless-subtitle-time-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-subtitle-style-section > .segmented-control,
+.lossless-subtitle-output-section > .segmented-control {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.lossless-subtitle-output-section p {
+  margin: 8px 0 0;
+  color: var(--text-color-secend);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1160px) {
+  .lossless-subtitle-option-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Keep every video-editor range control visually consistent across themes. */
+.lossless-video-page input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  overflow: hidden;
+  appearance: none;
+  -webkit-appearance: none;
+  background:
+    linear-gradient(
+      to right,
+      var(--text-color) 0,
+      var(--text-color) var(--lossless-range-progress, 0%),
+      color-mix(in srgb, var(--text-color) 22%, transparent) var(--lossless-range-progress, 0%),
+      color-mix(in srgb, var(--text-color) 22%, transparent) 100%
+    ) center / 100% 2px no-repeat;
+  box-shadow: none;
+  color: var(--text-color);
+  accent-color: var(--text-color);
+  cursor: pointer;
+}
+
+.lossless-video-page input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px;
+  border: 0;
+  border-radius: 1px;
+  background: transparent;
+}
+
+.lossless-video-page input[type="range"]::-webkit-slider-thumb {
+  width: 7px;
+  height: 12px;
+  margin-top: -5px;
+  border: 0;
+  border-radius: 2px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--text-color);
+  box-shadow: none;
+}
+
+.lossless-video-page input[type="range"]::-moz-range-track {
+  height: 2px;
+  border: 0;
+  border-radius: 1px;
+  background: transparent;
+}
+
+.lossless-video-page input[type="range"]::-moz-range-progress {
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+}
+
+.lossless-video-page input[type="range"]::-moz-range-thumb {
+  width: 7px;
+  height: 12px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--text-color);
+}
+
+.lossless-video-page input[type="range"]:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--text-color) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.lossless-video-page input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
 }

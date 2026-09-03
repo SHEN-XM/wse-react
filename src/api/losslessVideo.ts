@@ -1,4 +1,4 @@
-import { getReq, postReq, type ApiResponse } from "../utils/request";
+import { getReq, postBlobReq, postReq, type ApiResponse } from "../utils/request";
 
 export type LosslessCutMode = "keyframe-copy" | "precise-reencode" | "hybrid";
 export type AudioSeparationQuality = "fast" | "standard" | "high";
@@ -26,6 +26,20 @@ export type AudioSeparationStatus = {
   message?: string;
 };
 
+export type AudioSeparationApplyOptions = AudioSeparationOptions & {
+  sourceStart: number;
+  sourceEnd: number;
+  outputName?: string;
+};
+
+export type AudioSeparationApplyResponse = {
+  taskId: string;
+  duration: number;
+  engine?: string;
+  device?: string;
+  message?: string;
+};
+
 export type DetectParams = {
   maxSearchWindowSec: number;
   minRepeatSec: number;
@@ -34,7 +48,6 @@ export type DetectParams = {
   frameSampleFps: number;
   confirmPaddingMs: number;
   preferAudioFirst: boolean;
-  autoCropBlackBars: boolean;
   autoDetectSlideTransitions: boolean;
 };
 
@@ -81,6 +94,127 @@ export type MediaKeyframe = {
   easing?: "linear" | "ease-in" | "ease-out" | "ease-in-out";
 };
 
+export type ColorWheelValue = {
+  x: number;
+  y: number;
+  master: number;
+};
+
+export type VideoColorAdjustments = {
+  lift: ColorWheelValue;
+  gamma: ColorWheelValue;
+  gain: ColorWheelValue;
+  offset: ColorWheelValue;
+  saturation: number;
+};
+
+export type VideoEffectKind = "particles" | "snow" | "blur" | "mosaic";
+
+export type VideoEffectMask = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type ExportVideoEffect = {
+  id: string;
+  purpose?: "subtitle-background";
+  kind: VideoEffectKind;
+  start: number;
+  end: number;
+  enabled: boolean;
+  intensity: number;
+  opacity: number;
+  speed: number;
+  density: number;
+  seed: number;
+  mask?: VideoEffectMask;
+};
+
+export type SubtitleWord = {
+  text: string;
+  start: number;
+  end: number;
+  confidence?: number;
+};
+
+export type SubtitleCue = {
+  id: string;
+  start: number;
+  end: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  text: string;
+  confidence?: number;
+  speaker?: string;
+  words?: SubtitleWord[];
+};
+
+export type SubtitleStyle = {
+  fontFamily: string;
+  fontSize: number;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  color: string;
+  outlineColor: string;
+  outlineWidth: number;
+  backgroundColor: string;
+  backgroundAlpha: number;
+  backgroundBlur: number;
+  x: number;
+  position: number;
+  width: number;
+  alignment: "left" | "center" | "right";
+};
+
+export type ExportSubtitleTrack = {
+  id: string;
+  laneId: string;
+  layer: number;
+  name: string;
+  language: string;
+  enabled: boolean;
+  style: SubtitleStyle;
+  cues: SubtitleCue[];
+};
+
+export type SubtitleQuality = "fast" | "standard" | "high";
+export type SubtitleExportMode = "none" | "soft" | "burn";
+
+export type SubtitleTranscribeOptions = {
+  language: string;
+  quality: SubtitleQuality;
+  sourceStart: number;
+  sourceEnd: number;
+  maxCharsPerLine: number;
+  maxLines: number;
+  hotwords: string[];
+};
+
+export type SubtitleTranscribeResponse = {
+  taskId: string;
+  language: string;
+  duration: number;
+  engine: string;
+  model: string;
+  device: string;
+  cues: SubtitleCue[];
+  message?: string;
+};
+
+export type SubtitleEngineStatus = {
+  available: boolean;
+  engine?: string;
+  version?: string;
+  device?: string;
+  platform?: string;
+  model?: string;
+  modelReady: boolean;
+  message?: string;
+};
+
 export type ExportMediaTrack = {
   id: string;
   laneId: string;
@@ -89,12 +223,17 @@ export type ExportMediaTrack = {
   name: string;
   start: number;
   end: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  sourceVideoId?: string;
   enabled: boolean;
   volume?: number;
   opacity?: number;
   fadeIn?: number;
   fadeOut?: number;
   loop?: boolean;
+  sourceWidth?: number;
+  sourceHeight?: number;
   keyframes?: MediaKeyframe[];
 };
 
@@ -109,6 +248,13 @@ export type ExportVideoClip = {
   sourceStart: number;
   sourceEnd: number;
   primary: boolean;
+  volume?: number;
+  transform?: {
+    x: number;
+    y: number;
+    width: number;
+  };
+  color?: VideoColorAdjustments;
 };
 
 export type ExportTrackAsset = {
@@ -133,6 +279,7 @@ export type DetectResponse = {
   segments: DuplicateSegment[];
   cropRect?: CropRect;
   duration?: number;
+  audioPeaks?: number[];
   processedFrames?: number;
   message?: string;
 };
@@ -143,15 +290,17 @@ export type ExportRequest = {
   projectDuration: number;
   canvasWidth: number;
   canvasHeight: number;
+  forceCanvas?: boolean;
+  sourceVideoUnchanged?: boolean;
   frameRate: number;
   segments: DuplicateSegment[];
   tracks?: ExportMediaTrack[];
   videoClips?: ExportVideoClip[];
+  effects?: ExportVideoEffect[];
+  subtitleTracks?: ExportSubtitleTrack[];
+  subtitleMode?: SubtitleExportMode;
   mode: LosslessCutMode;
   outputName?: string;
-  autoCropBlackBars?: boolean;
-  cropRect?: CropRect;
-  audioSeparation?: AudioSeparationOptions;
 };
 
 export type ExportResponse = {
@@ -168,9 +317,15 @@ export type VideoTaskInfo = {
   stage?: string;
   message?: string;
   duration?: number;
+  audioPeaks?: number[];
   segments?: DuplicateSegment[];
   cropRect?: CropRect;
   outputPath?: string;
+  subtitleCues?: SubtitleCue[];
+  subtitleLanguage?: string;
+  subtitleEngine?: string;
+  subtitleModel?: string;
+  subtitleDevice?: string;
 };
 
 function unwrap<T>(resp: ApiResponse<T>) {
@@ -219,11 +374,150 @@ export async function getVideoTaskInfo(taskId: string) {
   return unwrap(resp);
 }
 
+export type VideoTaskWatcher = {
+  close: () => void;
+};
+
+export function watchVideoTask(
+  taskId: string,
+  onTask: (info: VideoTaskInfo) => void,
+  onConnectionChange?: (connected: boolean) => void
+): VideoTaskWatcher {
+  let closed = false;
+  let source: EventSource | undefined;
+  let fallbackDelay: number | undefined;
+  let fallbackTimer: number | undefined;
+  let fallbackBusy = false;
+
+  const stopFallback = () => {
+    if (fallbackDelay !== undefined) window.clearTimeout(fallbackDelay);
+    if (fallbackTimer !== undefined) window.clearInterval(fallbackTimer);
+    fallbackDelay = undefined;
+    fallbackTimer = undefined;
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    stopFallback();
+    source?.close();
+    source = undefined;
+  };
+  const acceptTask = (info: VideoTaskInfo) => {
+    if (closed) return;
+    onTask(info);
+  };
+  const pollFallback = async () => {
+    if (closed || fallbackBusy) return;
+    fallbackBusy = true;
+    try {
+      acceptTask(await getVideoTaskInfo(taskId));
+    } catch {
+      // SSE 会继续自动重连，轮询只负责断线期间的低频兜底。
+    } finally {
+      fallbackBusy = false;
+    }
+  };
+  const startFallback = () => {
+    if (closed || fallbackTimer !== undefined) return;
+    void pollFallback();
+    fallbackTimer = window.setInterval(() => void pollFallback(), 5000);
+  };
+
+  if (typeof EventSource === "undefined") {
+    startFallback();
+  } else {
+    const baseURL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+    source = new EventSource(`${baseURL}/check/video/task/events?taskId=${encodeURIComponent(taskId)}`, {
+      withCredentials: true
+    });
+    source.addEventListener("open", () => {
+      if (closed) return;
+      stopFallback();
+      onConnectionChange?.(true);
+    });
+    source.addEventListener("task", (event) => {
+      if (closed) return;
+      try {
+        const info = JSON.parse((event as MessageEvent<string>).data) as VideoTaskInfo;
+        stopFallback();
+        onConnectionChange?.(true);
+        acceptTask(info);
+      } catch {
+        startFallback();
+      }
+    });
+    source.addEventListener("error", () => {
+      if (closed) return;
+      onConnectionChange?.(false);
+      startFallback();
+    });
+    fallbackDelay = window.setTimeout(startFallback, 6000);
+  }
+
+  return { close };
+}
+
 export async function getAudioSeparationStatus(
   quality: AudioSeparationQuality = "standard",
   mode: AudioSeparationMode = "vocals"
 ) {
   const resp = await getReq<AudioSeparationStatus>("/check/video/audio-separation/status", { quality, mode }, { timeout: 60_000 });
+  return unwrap(resp);
+}
+
+export async function applyAudioSeparationToAsset(
+  taskId: string,
+  file: File,
+  options: AudioSeparationApplyOptions,
+  signal?: AbortSignal,
+  onUploadProgress?: (fraction: number) => void
+) {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  formData.append("options", JSON.stringify({ ...options, enabled: true }));
+  const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+  const resp = await postReq<AudioSeparationApplyResponse>(`/check/video/audio-separation/apply${query}`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    signal,
+    timeout: 0,
+    onUploadProgress: (event) => {
+      const total = Number(event.total || 0);
+      if (total > 0) onUploadProgress?.(Math.min(1, Math.max(0, event.loaded / total)));
+    }
+  });
+  return unwrap(resp);
+}
+
+export function downloadVideoOutputBlob(taskId: string, signal?: AbortSignal) {
+  if (!taskId) throw new Error("声音处理任务不存在，请重新处理");
+  return postBlobReq("/check/video/download", { taskId }, { signal, timeout: 0 });
+}
+
+export async function getSubtitleEngineStatus(quality: SubtitleQuality = "standard") {
+  const resp = await getReq<SubtitleEngineStatus>("/check/video/subtitle/status", { quality }, { timeout: 60_000 });
+  return unwrap(resp);
+}
+
+export async function transcribeSubtitles(
+  taskId: string,
+  file: File,
+  options: SubtitleTranscribeOptions,
+  signal?: AbortSignal,
+  onUploadProgress?: (fraction: number) => void
+) {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  formData.append("options", JSON.stringify(options));
+  const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+  const resp = await postReq<SubtitleTranscribeResponse>(`/check/video/subtitle/transcribe${query}`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    signal,
+    timeout: 0,
+    onUploadProgress: (event) => {
+      const total = Number(event.total || 0);
+      if (total > 0) onUploadProgress?.(Math.min(1, Math.max(0, event.loaded / total)));
+    }
+  });
   return unwrap(resp);
 }
 
@@ -264,7 +558,7 @@ export async function cancelVideoTask(taskId?: string) {
 
 export function downloadVideoOutput(taskId?: string, filename = "video_clean.mp4") {
   if (!taskId) {
-    throw new Error("导出任务不存在，请重新检测");
+    throw new Error("导出任务不存在，请重新导出");
   }
   const baseURL = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
   const link = document.createElement("a");

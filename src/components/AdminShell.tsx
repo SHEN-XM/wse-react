@@ -60,7 +60,7 @@ export default function AdminShell() {
       <aside className="admin-sidebar">
         <div className="brand-row">
           <div className="brand-block">
-            {!collapsed && <strong>最强后台</strong>}
+            {!collapsed && <strong>殿堂后台</strong>}
           </div>
           <button className="icon-button" type="button" onClick={() => setCollapsed((value) => !value)}>
             {collapsed ? <Menu size={18} /> : <ChevronLeft size={18} />}

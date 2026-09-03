@@ -17,7 +17,9 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/check": {
           target: proxyTarget,
-          changeOrigin: true
+          changeOrigin: true,
+          timeout: 0,
+          proxyTimeout: 0
         }
       }
     }

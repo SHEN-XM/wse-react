@@ -126,7 +126,7 @@ export default function LoginPage() {
       <section className="login-panel">
         <div className="login-brand">
           <div>
-            <h1>最强后台</h1>
+            <h1>殿堂后台</h1>
           </div>
         </div>
 

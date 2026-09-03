@@ -76,6 +76,8 @@ type CoverTag = {
   bold: boolean;
   rotation: number;
   fontSize: number;
+  widthScale: number;
+  heightScale: number;
   x: number;
   y: number;
 };
@@ -103,13 +105,40 @@ type TagDragState = DragStateBase & {
   normalizedPerPixelY: number;
 };
 
-type DragState = ImageDragState | TagDragState;
+type TagResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+
+type TagResizeDragState = DragStateBase & {
+  kind: "tag-resize";
+  tagId: string;
+  tagFontSize: number;
+  tagWidthScale: number;
+  tagHeightScale: number;
+  tagWidth: number;
+  tagHeight: number;
+  anchorX: number;
+  anchorY: number;
+  directionX: -1 | 0 | 1;
+  directionY: -1 | 0 | 1;
+  initialVectorX: number;
+  initialVectorY: number;
+  rotation: number;
+  unitsPerPixelX: number;
+  unitsPerPixelY: number;
+};
+
+type DragState = ImageDragState | TagDragState | TagResizeDragState;
 
 type TagMetrics = {
   width: number;
   height: number;
+  baseWidth: number;
+  baseHeight: number;
   fontSize: number;
 };
+
+const tagResizeHandles: TagResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const minTagAxisScale = 0.25;
+const maxTagAxisScale = 4;
 
 const coverRatioPresets: CoverRatioPreset[] = [
   { id: "landscape-16-9", label: "YouTube / 西瓜视频 · 16:9", ratioWidth: 16, ratioHeight: 9 },
@@ -162,6 +191,11 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeTagAxisScale(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? clamp(parsed, minTagAxisScale, maxTagAxisScale) : 1;
+}
+
 function normalizeRatioPart(value: unknown, fallback: number) {
   const parsed = Math.round(Number(value));
   return Number.isFinite(parsed) ? clamp(parsed, minRatioPart, maxRatioPart) : fallback;
@@ -182,6 +216,8 @@ function normalizeStoredTags(value: unknown): CoverTag[] {
   return value.slice(0, 20).map((entry, index) => {
     const tag = entry && typeof entry === "object" ? entry as Partial<CoverTag> : {};
     const fontSize = Number(tag.fontSize);
+    const widthScale = Number(tag.widthScale);
+    const heightScale = Number(tag.heightScale);
     const rotation = Number(tag.rotation);
     const x = Number(tag.x);
     const y = Number(tag.y);
@@ -191,6 +227,8 @@ function normalizeStoredTags(value: unknown): CoverTag[] {
       color: normalizeTagColor(tag.color),
       bold: typeof tag.bold === "boolean" ? tag.bold : true,
       fontSize: Number.isFinite(fontSize) ? clamp(fontSize, 4, 20) : 8,
+      widthScale: normalizeTagAxisScale(widthScale),
+      heightScale: normalizeTagAxisScale(heightScale),
       rotation: Number.isFinite(rotation) ? clamp(rotation, -180, 180) : 0,
       x: Number.isFinite(x) ? clamp(x, 0, 1) : 0.5,
       y: Number.isFinite(y) ? clamp(y, 0, 1) : clamp(0.16 + index * 0.1, 0.12, 0.82)
@@ -305,6 +343,8 @@ function createTag(index: number): CoverTag {
     bold: true,
     rotation: 0,
     fontSize: 8,
+    widthScale: 1,
+    heightScale: 1,
     x: 0.5,
     y: clamp(0.16 + index * 0.1, 0.12, 0.82)
   };
@@ -319,9 +359,13 @@ function getTagMetrics(context: CanvasRenderingContext2D, tag: CoverTag, outputS
   context.font = `${tag.bold ? 700 : 400} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
   context.textRendering = "optimizeLegibility";
   const textWidth = context.measureText(tagDisplayText(tag)).width;
+  const baseWidth = Math.ceil(Math.max(fontSize * 1.7, textWidth + fontSize * 0.86));
+  const baseHeight = Math.ceil(fontSize * 1.52);
   return {
-    width: Math.ceil(Math.max(fontSize * 1.7, textWidth + fontSize * 0.86)),
-    height: Math.ceil(fontSize * 1.52),
+    width: Math.ceil(baseWidth * normalizeTagAxisScale(tag.widthScale)),
+    height: Math.ceil(baseHeight * normalizeTagAxisScale(tag.heightScale)),
+    baseWidth,
+    baseHeight,
     fontSize
   };
 }
@@ -367,10 +411,14 @@ function paintTags(
     const metrics = getTagMetrics(context, tag, outputSize);
     context.translate(Math.round(tag.x * outputSize.width), Math.round(tag.y * outputSize.height));
     context.rotate(tag.rotation * Math.PI / 180);
+    context.scale(
+      normalizeTagAxisScale(tag.widthScale),
+      normalizeTagAxisScale(tag.heightScale)
+    );
 
-    const left = -metrics.width / 2;
-    const top = -metrics.height / 2;
-    roundedRectPath(context, left, top, metrics.width, metrics.height, 2);
+    const left = -metrics.baseWidth / 2;
+    const top = -metrics.baseHeight / 2;
+    roundedRectPath(context, left, top, metrics.baseWidth, metrics.baseHeight, 2);
     context.fillStyle = tag.color;
     context.fill();
 
@@ -503,6 +551,11 @@ export default function CoverMakerPage() {
     () => tags.find((tag) => tag.id === selectedTagId) || null,
     [selectedTagId, tags]
   );
+  const selectedTagMetrics = useMemo(() => {
+    if (!source || !selectedTag) return null;
+    const context = canvasRef.current?.getContext("2d");
+    return context ? getTagMetrics(context, selectedTag, cropSize) : null;
+  }, [cropSize, selectedTag, source]);
 
   useEffect(() => {
     try {
@@ -605,7 +658,7 @@ export default function CoverMakerPage() {
 
   const acceptFile = (file: File) => {
     if (!isImageFile(file)) {
-      notify({ type: "warning", title: "无法读取图片", message: "请选择 JPG、PNG、WebP 或 AVIF 图片。" });
+      notify({ type: "error", title: "无法读取图片", message: "请选择 JPG、PNG、WebP 或 AVIF 图片。" });
       return;
     }
 
@@ -697,6 +750,56 @@ export default function CoverMakerPage() {
     setPanning(true);
   };
 
+  const startTagResize = (event: PointerEvent<HTMLButtonElement>, handle: TagResizeHandle) => {
+    if (!source || !selectedTag || !selectedTagMetrics || event.button !== 0) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const bounds = canvas.getBoundingClientRect();
+    const unitsPerPixelX = cropSize.width / Math.max(1, bounds.width);
+    const unitsPerPixelY = cropSize.height / Math.max(1, bounds.height);
+    const directionX: -1 | 0 | 1 = handle.includes("e") ? 1 : handle.includes("w") ? -1 : 0;
+    const directionY: -1 | 0 | 1 = handle.includes("s") ? 1 : handle.includes("n") ? -1 : 0;
+    const radians = selectedTag.rotation * Math.PI / 180;
+    const cosine = Math.cos(radians);
+    const sine = Math.sin(radians);
+    const centerX = selectedTag.x * cropSize.width;
+    const centerY = selectedTag.y * cropSize.height;
+    const oppositeX = -directionX * selectedTagMetrics.width / 2;
+    const oppositeY = -directionY * selectedTagMetrics.height / 2;
+    const anchorX = centerX + oppositeX * cosine - oppositeY * sine;
+    const anchorY = centerY + oppositeX * sine + oppositeY * cosine;
+    const pointerX = (event.clientX - bounds.left) * unitsPerPixelX;
+    const pointerY = (event.clientY - bounds.top) * unitsPerPixelY;
+    const pointerDeltaX = pointerX - anchorX;
+    const pointerDeltaY = pointerY - anchorY;
+
+    dragRef.current = {
+      kind: "tag-resize",
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      tagId: selectedTag.id,
+      tagFontSize: selectedTag.fontSize,
+      tagWidthScale: normalizeTagAxisScale(selectedTag.widthScale),
+      tagHeightScale: normalizeTagAxisScale(selectedTag.heightScale),
+      tagWidth: selectedTagMetrics.width,
+      tagHeight: selectedTagMetrics.height,
+      anchorX,
+      anchorY,
+      directionX,
+      directionY,
+      initialVectorX: pointerDeltaX * cosine + pointerDeltaY * sine,
+      initialVectorY: -pointerDeltaX * sine + pointerDeltaY * cosine,
+      rotation: radians,
+      unitsPerPixelX,
+      unitsPerPixelY
+    };
+    setPanning(true);
+  };
+
   const movePointerDrag = useCallback((pointerId: number, clientX: number, clientY: number) => {
     const drag = dragRef.current;
     if (!source || !drag || drag.pointerId !== pointerId) return;
@@ -704,6 +807,64 @@ export default function CoverMakerPage() {
       const nextX = clamp(drag.tagX + (clientX - drag.startX) * drag.normalizedPerPixelX, 0, 1);
       const nextY = clamp(drag.tagY + (clientY - drag.startY) * drag.normalizedPerPixelY, 0, 1);
       setTags((current) => current.map((tag) => tag.id === drag.tagId ? { ...tag, x: nextX, y: nextY } : tag));
+      return;
+    }
+    if (drag.kind === "tag-resize") {
+      const cosine = Math.cos(drag.rotation);
+      const sine = Math.sin(drag.rotation);
+      const pointerX = (clientX - drag.startX) * drag.unitsPerPixelX
+        + drag.anchorX + drag.initialVectorX * cosine - drag.initialVectorY * sine;
+      const pointerY = (clientY - drag.startY) * drag.unitsPerPixelY
+        + drag.anchorY + drag.initialVectorX * sine + drag.initialVectorY * cosine;
+      const pointerDeltaX = pointerX - drag.anchorX;
+      const pointerDeltaY = pointerY - drag.anchorY;
+      const localX = pointerDeltaX * cosine + pointerDeltaY * sine;
+      const localY = -pointerDeltaX * sine + pointerDeltaY * cosine;
+      let nextSize: Partial<CoverTag>;
+      let centerLocalX = 0;
+      let centerLocalY = 0;
+      if (drag.directionX !== 0 && drag.directionY !== 0) {
+        const vectorLengthSquared = Math.max(
+          1,
+          drag.initialVectorX * drag.initialVectorX + drag.initialVectorY * drag.initialVectorY
+        );
+        const requestedScale = (
+          localX * drag.initialVectorX + localY * drag.initialVectorY
+        ) / vectorLengthSquared;
+        const nextFontSize = clamp(drag.tagFontSize * requestedScale, 4, 20);
+        const scale = nextFontSize / Math.max(0.001, drag.tagFontSize);
+        centerLocalX = drag.directionX * drag.tagWidth * scale / 2;
+        centerLocalY = drag.directionY * drag.tagHeight * scale / 2;
+        nextSize = { fontSize: nextFontSize };
+      } else if (drag.directionX !== 0) {
+        const requestedScale = localX / (Math.abs(drag.initialVectorX) < 0.001 ? drag.directionX : drag.initialVectorX);
+        const nextWidthScale = clamp(
+          drag.tagWidthScale * requestedScale,
+          minTagAxisScale,
+          maxTagAxisScale
+        );
+        const scale = nextWidthScale / Math.max(0.001, drag.tagWidthScale);
+        centerLocalX = drag.directionX * drag.tagWidth * scale / 2;
+        nextSize = { widthScale: nextWidthScale };
+      } else {
+        const requestedScale = localY / (Math.abs(drag.initialVectorY) < 0.001 ? drag.directionY : drag.initialVectorY);
+        const nextHeightScale = clamp(
+          drag.tagHeightScale * requestedScale,
+          minTagAxisScale,
+          maxTagAxisScale
+        );
+        const scale = nextHeightScale / Math.max(0.001, drag.tagHeightScale);
+        centerLocalY = drag.directionY * drag.tagHeight * scale / 2;
+        nextSize = { heightScale: nextHeightScale };
+      }
+      const centerX = drag.anchorX + centerLocalX * cosine - centerLocalY * sine;
+      const centerY = drag.anchorY + centerLocalX * sine + centerLocalY * cosine;
+      setTags((current) => current.map((tag) => tag.id === drag.tagId ? {
+        ...tag,
+        ...nextSize,
+        x: clamp(centerX / Math.max(1, cropSize.width), 0, 1),
+        y: clamp(centerY / Math.max(1, cropSize.height), 0, 1)
+      } : tag));
       return;
     }
     const nextPoint = {
@@ -770,7 +931,7 @@ export default function CoverMakerPage() {
       || finalOutputSize.width * finalOutputSize.height > maxExportPixels
     ) {
       notify({
-        type: "warning",
+        type: "error",
         title: "导出尺寸过大",
         message: `${finalOutputSize.width} × ${finalOutputSize.height} 超出浏览器安全处理范围，请降低导出倍率。`
       });
@@ -811,7 +972,6 @@ export default function CoverMakerPage() {
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
-      notify({ type: "success", title: "封面已导出", message: `${outputName} · ${formatFileSize(blob.size)}` });
     } catch (error) {
       notify({ type: "error", title: "导出失败", message: error instanceof Error ? error.message : "请稍后重试。" });
     } finally {
@@ -881,7 +1041,7 @@ export default function CoverMakerPage() {
                 setDropActive(false);
                 const file = Array.from(event.dataTransfer.files).find(isImageFile);
                 if (file) acceptFile(file);
-                else notify({ type: "warning", title: "未找到图片", message: "请拖入一个可读取的图片文件。" });
+                else notify({ type: "error", title: "未找到图片", message: "请拖入一个可读取的图片文件。" });
               }}
             >
               <div
@@ -899,6 +1059,31 @@ export default function CoverMakerPage() {
                   onPointerDown={handlePointerDown}
                   onWheel={handleWheel}
                 />
+                {source && selectedTag && selectedTagMetrics ? (
+                  <div
+                    className="cover-maker-tag-selection"
+                    style={{
+                      left: `${selectedTag.x * 100}%`,
+                      top: `${selectedTag.y * 100}%`,
+                      width: `${selectedTagMetrics.width / Math.max(1, cropSize.width) * 100}%`,
+                      height: `${selectedTagMetrics.height / Math.max(1, cropSize.height) * 100}%`,
+                      transform: `translate(-50%, -50%) rotate(${selectedTag.rotation}deg)`
+                    }}
+                  >
+                    {tagResizeHandles.map((handle) => (
+                      <button
+                        key={handle}
+                        className={`cover-maker-tag-resize-handle is-${handle}`}
+                        type="button"
+                        tabIndex={-1}
+                        title={handle.length === 1 ? "自由拉伸标签" : "等比例缩放标签"}
+                        aria-label={`${handle.length === 1 ? "拉伸" : "缩放"}标签 ${handle}`}
+                        style={{ transform: `rotate(${-selectedTag.rotation}deg)` }}
+                        onPointerDown={(event) => startTagResize(event, handle)}
+                      />
+                    ))}
+                  </div>
+                ) : null}
                 {source && showGrid ? (
                   <div className="cover-maker-grid" aria-hidden="true">
                     <i /><i /><i /><i />
