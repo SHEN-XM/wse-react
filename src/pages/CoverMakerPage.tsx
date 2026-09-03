@@ -16,8 +16,9 @@ import {
   Trash2
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, PointerEvent, WheelEvent } from "react";
+import type { CSSProperties, InputHTMLAttributes, KeyboardEvent, PointerEvent, WheelEvent } from "react";
 import AppSelect from "../components/AppSelect";
+import AppSwitch from "../components/AppSwitch";
 import SegmentedControl from "../components/SegmentedControl";
 import { notify } from "../utils/notify";
 
@@ -189,6 +190,27 @@ const defaultSettings: StoredSettings = {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+type CoverRangeProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type">;
+
+function CoverRange({ min = 0, max = 100, value, defaultValue, style, ...props }: CoverRangeProps) {
+  const minimum = Number(min);
+  const maximum = Number(max);
+  const current = Number(value ?? defaultValue ?? minimum);
+  const progress = maximum > minimum ? clamp(((current - minimum) / (maximum - minimum)) * 100, 0, 100) : 0;
+
+  return (
+    <input
+      {...props}
+      type="range"
+      min={min}
+      max={max}
+      value={value}
+      defaultValue={defaultValue}
+      style={{ ...style, "--lossless-range-progress": `${progress}%` } as CSSProperties}
+    />
+  );
 }
 
 function normalizeTagAxisScale(value: unknown) {
@@ -983,18 +1005,16 @@ export default function CoverMakerPage() {
     <section className="workspace module-workspace cover-maker-page">
       <section className="data-panel data-panel-full data-panel-compact cover-maker-panel">
         <div className="table-toolbar cover-maker-toolbar">
-          <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={loading}>
-            {loading ? <Loader2 className="spin" size={16} /> : <FolderOpen size={16} />}
-            {source ? "更换图片" : "选择图片"}
-          </button>
-          <button type="button" onClick={downloadCover} disabled={!source || exporting}>
-            {exporting ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
-            下载封面
-          </button>
-          <button type="button" onClick={resetCrop} disabled={!source}>
-            <RotateCcw size={16} />
-            重置裁剪
-          </button>
+          <div className="cover-maker-toolbar-actions">
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading}>
+              {loading ? <Loader2 className="spin" size={16} /> : <FolderOpen size={16} />}
+              {source ? "更换图片" : "选择图片"}
+            </button>
+            <button type="button" onClick={resetCrop} disabled={!source}>
+              <RotateCcw size={16} />
+              重置裁剪
+            </button>
+          </div>
           <input
             ref={fileInputRef}
             hidden
@@ -1006,10 +1026,10 @@ export default function CoverMakerPage() {
               event.currentTarget.value = "";
             }}
           />
-          <span className="cover-maker-local-status">
-            <ShieldCheck size={15} />
-            本地处理 · {ratioLabel}
-          </span>
+          <button className="primary-button cover-maker-toolbar-download" type="button" onClick={downloadCover} disabled={!source || exporting}>
+            {exporting ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
+            下载封面
+          </button>
         </div>
 
         <div className="cover-maker-body">
@@ -1053,7 +1073,6 @@ export default function CoverMakerPage() {
                   width={previewWidth}
                   height={previewHeight}
                   tabIndex={source ? 0 : -1}
-                  aria-label="封面裁剪画布"
                   onDoubleClick={resetCrop}
                   onKeyDown={handleKeyDown}
                   onPointerDown={handlePointerDown}
@@ -1119,11 +1138,13 @@ export default function CoverMakerPage() {
                 <span>{ratioLabel}</span>
               </header>
               <AppSelect
-                className="cover-maker-preset-select"
+                className="cover-maker-preset-select lossless-editor-select"
+                menuClassName="lossless-editor-select-menu"
                 value={presetId}
                 options={presetOptions}
                 onChange={selectPreset}
                 ariaLabel="平台比例预设"
+                matchTriggerWidth
                 maxMenuHeight={380}
               />
               <div className="cover-maker-dimensions cover-maker-ratio-inputs">
@@ -1134,7 +1155,6 @@ export default function CoverMakerPage() {
                     min={minRatioPart}
                     max={maxRatioPart}
                     value={ratioWidth}
-                    aria-label="比例宽度"
                     onChange={(event) => setCustomRatio("width", event.target.value)}
                   />
                 </label>
@@ -1148,7 +1168,6 @@ export default function CoverMakerPage() {
                     min={minRatioPart}
                     max={maxRatioPart}
                     value={ratioHeight}
-                    aria-label="比例高度"
                     onChange={(event) => setCustomRatio("height", event.target.value)}
                   />
                 </label>
@@ -1164,8 +1183,7 @@ export default function CoverMakerPage() {
                 <button type="button" title="缩小图片" aria-label="缩小图片" onClick={() => updateZoom(zoom - 0.05)} disabled={!source || zoom <= 1}>
                   <Minus size={16} />
                 </button>
-                <input
-                  type="range"
+                <CoverRange
                   min={100}
                   max={500}
                   step={1}
@@ -1261,25 +1279,22 @@ export default function CoverMakerPage() {
                     </label>
                   </div>
 
-                  <label className="cover-maker-check">
-                    <input
-                      type="checkbox"
-                      checked={selectedTag.bold}
-                      aria-label="标签粗体"
-                      onChange={(event) => updateSelectedTag({ bold: event.target.checked })}
-                    />
+                  <div className="cover-maker-switch-row">
                     <span>粗体</span>
-                  </label>
+                    <AppSwitch
+                      checked={selectedTag.bold}
+                      onChange={(checked) => updateSelectedTag({ bold: checked })}
+                      ariaLabel="标签粗体"
+                    />
+                  </div>
 
                   <label className="cover-maker-tag-range">
                     <span>字号</span>
-                    <input
-                      type="range"
+                    <CoverRange
                       min={4}
                       max={20}
                       step={1}
                       value={selectedTag.fontSize}
-                      aria-label="标签字号"
                       onChange={(event) => updateSelectedTag({ fontSize: Number(event.target.value) })}
                     />
                     <input
@@ -1288,20 +1303,17 @@ export default function CoverMakerPage() {
                       min={4}
                       max={20}
                       value={selectedTag.fontSize}
-                      aria-label="标签字号数值"
                       onChange={(event) => updateSelectedTag({ fontSize: clamp(Number(event.target.value) || 4, 4, 20) })}
                     />
                   </label>
 
                   <label className="cover-maker-tag-range">
                     <span>旋转</span>
-                    <input
-                      type="range"
+                    <CoverRange
                       min={-180}
                       max={180}
                       step={1}
                       value={selectedTag.rotation}
-                      aria-label="标签旋转角度"
                       onChange={(event) => updateSelectedTag({ rotation: Number(event.target.value) })}
                     />
                     <input
@@ -1310,7 +1322,6 @@ export default function CoverMakerPage() {
                       min={-180}
                       max={180}
                       value={selectedTag.rotation}
-                      aria-label="标签旋转角度数值"
                       onChange={(event) => updateSelectedTag({ rotation: clamp(Number(event.target.value) || 0, -180, 180) })}
                     />
                   </label>
@@ -1322,14 +1333,14 @@ export default function CoverMakerPage() {
               <header className="cover-maker-control-title">
                 <div><Grid3X3 size={17} /><strong>辅助线</strong></div>
               </header>
-              <label className="cover-maker-check">
-                <input type="checkbox" checked={showGrid} onChange={(event) => setShowGrid(event.target.checked)} />
+              <div className="cover-maker-switch-row">
                 <span>三分线</span>
-              </label>
-              <label className="cover-maker-check">
-                <input type="checkbox" checked={showSafeArea} onChange={(event) => setShowSafeArea(event.target.checked)} />
+                <AppSwitch checked={showGrid} onChange={setShowGrid} ariaLabel="三分线" />
+              </div>
+              <div className="cover-maker-switch-row">
                 <span>标题安全区</span>
-              </label>
+                <AppSwitch checked={showSafeArea} onChange={setShowSafeArea} ariaLabel="标题安全区" />
+              </div>
             </section>
 
             <section>
@@ -1344,8 +1355,7 @@ export default function CoverMakerPage() {
               <SegmentedControl className="cover-maker-format" value={format} options={formatOptions} onChange={setFormat} />
               <label className={`cover-maker-quality ${format === "png" ? "is-disabled" : ""}`}>
                 <span>画质</span>
-                <input
-                  type="range"
+                <CoverRange
                   min={40}
                   max={100}
                   step={1}
@@ -1356,10 +1366,6 @@ export default function CoverMakerPage() {
                 <em>{format === "png" ? "无损" : `${quality}%`}</em>
               </label>
               <div className="cover-maker-output-name" title={outputName}>{outputName}</div>
-              <button className="primary-button cover-maker-download" type="button" onClick={downloadCover} disabled={!source || exporting}>
-                {exporting ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
-                下载封面
-              </button>
             </section>
           </aside>
         </div>

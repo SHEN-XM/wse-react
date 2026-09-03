@@ -2146,7 +2146,6 @@ export default function AiTextPage() {
         <span className="aitext-select-cell">
           <input
             type="checkbox"
-            aria-label="选择当前页任务"
             checked={currentPageAllSelected}
             disabled={!selectableTaskIds.length}
             onChange={(event) => toggleCurrentPageSelected(event.target.checked)}
