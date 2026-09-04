@@ -6,8 +6,10 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  Copy,
   Diamond,
   Download,
+  Eraser,
   Eye,
   ImageIcon,
   FileVideo,
@@ -46,6 +48,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type InputHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  applyWatermarkRemovalToAsset,
   applyAudioSeparationToAsset,
   cancelVideoTask,
   createVideoTaskId,
@@ -55,6 +58,7 @@ import {
   exportCleanVideo,
   getAudioSeparationStatus,
   getSubtitleEngineStatus,
+  getWatermarkRemovalStatus,
   transcribeSubtitles,
   watchVideoTask,
   type AudioSeparationMode,
@@ -79,7 +83,9 @@ import {
   type VideoColorAdjustments,
   type VideoEffectKind,
   type VideoEffectMask,
-  type VideoInput
+  type VideoEffectMaskKeyframe,
+  type VideoInput,
+  type WatermarkRemovalStatus
 } from "../api/losslessVideo";
 import AppSelect from "../components/AppSelect";
 import AppSwitch from "../components/AppSwitch";
@@ -99,7 +105,7 @@ import {
   type EditorSubtitleTrack
 } from "../features/video-editor/subtitles";
 
-type TaskStatus = "idle" | "detecting" | "detected" | "transcribing" | "separating" | "exporting" | "done" | "error" | "cancelled";
+type TaskStatus = "idle" | "detecting" | "detected" | "transcribing" | "separating" | "inpainting" | "exporting" | "done" | "error" | "cancelled";
 
 type ProgressState = {
   percent: number;
@@ -107,7 +113,7 @@ type ProgressState = {
   detail: string;
 };
 
-type InspectorTab = "detect" | "tracks" | "subtitles" | "effects" | "cover" | "export" | "settings";
+type InspectorTab = "detect" | "tracks" | "subtitles" | "watermark" | "effects" | "cover" | "export" | "settings";
 type SegmentFilter = "settings" | "repeat" | "transition";
 type TimelineTool = "select" | "blade";
 type ProjectAspectPreset = "source" | "16:9" | "4:3" | "2.35:1" | "2:1" | "1.85:1" | "9:16" | "3:4" | "1:1";
@@ -140,7 +146,8 @@ type MediaContextMenu = {
     | { kind: "resource"; resourceId: string }
     | { kind: "video-clip"; clipId: string; time: number }
     | { kind: "track"; trackId: string; time: number }
-    | { kind: "subtitle-cue"; trackId: string; cueId: string; time: number };
+    | { kind: "subtitle-cue"; trackId: string; cueId: string; time: number }
+    | { kind: "effect"; effectId: string };
 };
 
 type EditorTrackBase = {
@@ -242,6 +249,9 @@ type VideoTransform = {
 const videoResizeHandles = ["nw", "ne", "se", "sw"] as const;
 type VideoResizeHandle = (typeof videoResizeHandles)[number];
 type VideoTransformAction = "move" | `resize-${VideoResizeHandle}`;
+const effectMaskResizeHandles = ["nw", "ne", "se", "sw"] as const;
+type EffectMaskResizeHandle = (typeof effectMaskResizeHandles)[number];
+type EffectMaskTransformAction = "move" | `resize-${EffectMaskResizeHandle}`;
 const subtitleResizeHandles = ["nw", "ne", "e", "se", "sw", "w"] as const;
 type SubtitleResizeHandle = (typeof subtitleResizeHandles)[number];
 type SubtitleTransformAction = "move" | `resize-${SubtitleResizeHandle}`;
@@ -401,7 +411,11 @@ function cloneVideoColor(color: VideoColorAdjustments): VideoColorAdjustments {
 }
 
 function cloneEditorEffect(effect: EditorEffect): EditorEffect {
-  return { ...effect, mask: effect.mask ? { ...effect.mask } : undefined };
+  return {
+    ...effect,
+    mask: effect.mask ? { ...effect.mask } : undefined,
+    maskKeyframes: effect.maskKeyframes?.map((keyframe) => ({ ...keyframe }))
+  };
 }
 
 function cloneProjectVideoCover(cover?: ProjectVideoCover) {
@@ -515,7 +529,9 @@ const videoEffectDefinitions: Array<{
   { kind: "particles", name: "粒子", scope: "global" },
   { kind: "snow", name: "雪花", scope: "global" },
   { kind: "blur", name: "局部模糊", scope: "local" },
-  { kind: "mosaic", name: "局部马赛克", scope: "local" }
+  { kind: "mosaic", name: "局部马赛克", scope: "local" },
+  { kind: "watermark", name: "去水印贴", scope: "local" },
+  { kind: "ai-watermark", name: "时序去水印", scope: "local" }
 ];
 const timelineMinZoom = 0.25;
 const timelineMinZoomExponent = Math.log2(timelineMinZoom);
@@ -910,7 +926,17 @@ function videoColorChannelTables(color: VideoColorAdjustments) {
 }
 
 function effectIsLocal(effect: Pick<EditorEffect, "kind">) {
-  return effect.kind === "blur" || effect.kind === "mosaic";
+  return effect.kind === "blur" || effect.kind === "mosaic" || effect.kind === "watermark" || effect.kind === "ai-watermark";
+}
+
+function inspectorTabForEffect(effect: Pick<EditorEffect, "kind">): InspectorTab {
+  return effect.kind === "ai-watermark" ? "watermark" : "effects";
+}
+
+function VideoEffectIcon({ kind, size }: { kind: VideoEffectKind; size: number }) {
+  if (kind === "snow") return <Snowflake size={size} />;
+  if (kind === "watermark" || kind === "ai-watermark") return <Eraser size={size} />;
+  return <Sparkles size={size} />;
 }
 
 function isVideoEffectKind(value: string): value is VideoEffectKind {
@@ -928,11 +954,118 @@ function normalizeEffectMask(mask: VideoEffectMask): VideoEffectMask {
   };
 }
 
+function effectMaskAtTime(
+  effect: Pick<EditorEffect, "mask" | "maskKeyframes">,
+  time: number
+): VideoEffectMask | undefined {
+  const keyframes = [...(effect.maskKeyframes || [])].sort((left, right) => left.time - right.time);
+  if (!keyframes.length) return effect.mask ? normalizeEffectMask(effect.mask) : undefined;
+  if (time <= keyframes[0].time) return normalizeEffectMask(keyframes[0]);
+  const last = keyframes[keyframes.length - 1];
+  if (time >= last.time) return normalizeEffectMask(last);
+  const rightIndex = keyframes.findIndex((keyframe) => keyframe.time >= time);
+  const left = keyframes[Math.max(0, rightIndex - 1)];
+  const right = keyframes[rightIndex];
+  const progress = clampValue((time - left.time) / Math.max(0.000001, right.time - left.time), 0, 1);
+  return normalizeEffectMask({
+    x: left.x + (right.x - left.x) * progress,
+    y: left.y + (right.y - left.y) * progress,
+    width: left.width + (right.width - left.width) * progress,
+    height: left.height + (right.height - left.height) * progress
+  });
+}
+
+function paintWatermarkRepairRegion(
+  outputContext: CanvasRenderingContext2D,
+  sourceContext: CanvasRenderingContext2D,
+  effect: Pick<EditorEffect, "intensity" | "opacity" | "mask">,
+  sourceSize: PreviewSize,
+  canvasSize: PreviewSize
+) {
+  if (!effect.mask || canvasSize.width < 4 || canvasSize.height < 4 || effect.opacity <= 0.0001) return;
+  const mask = normalizeEffectMask(effect.mask);
+  const outputScale = Math.min(
+    canvasSize.width / Math.max(1, sourceSize.width),
+    canvasSize.height / Math.max(1, sourceSize.height)
+  );
+  const padding = Math.max(1, Math.round((1 + effect.intensity * 12) * outputScale));
+  const requestedWidth = Math.max(2, Math.round(canvasSize.width * mask.width / 100) + padding * 2);
+  const requestedHeight = Math.max(2, Math.round(canvasSize.height * mask.height / 100) + padding * 2);
+  const x = Math.max(1, Math.min(
+    canvasSize.width - 3,
+    Math.round(canvasSize.width * (mask.x - mask.width / 2) / 100) - padding
+  ));
+  const y = Math.max(1, Math.min(
+    canvasSize.height - 3,
+    Math.round(canvasSize.height * (mask.y - mask.height / 2) / 100) - padding
+  ));
+  const width = Math.max(2, Math.min(canvasSize.width - x - 1, requestedWidth));
+  const height = Math.max(2, Math.min(canvasSize.height - y - 1, requestedHeight));
+  if (width < 2 || height < 2) return;
+
+  try {
+    const boundary = sourceContext.getImageData(x - 1, y - 1, width + 2, height + 2);
+    const repaired = outputContext.createImageData(width, height);
+    const stride = width + 2;
+    const opacity = Math.round(clampValue(effect.opacity, 0, 1) * 255);
+
+    for (let row = 0; row < height; row += 1) {
+      const topDistance = row + 1;
+      const bottomDistance = height - row;
+      const topWeight = 1 / (topDistance * topDistance);
+      const bottomWeight = 1 / (bottomDistance * bottomDistance);
+      for (let column = 0; column < width; column += 1) {
+        const leftDistance = column + 1;
+        const rightDistance = width - column;
+        const leftWeight = 1 / (leftDistance * leftDistance);
+        const rightWeight = 1 / (rightDistance * rightDistance);
+        const weight = topWeight + bottomWeight + leftWeight + rightWeight;
+        const topOffset = (column + 1) * 4;
+        const bottomOffset = ((height + 1) * stride + column + 1) * 4;
+        const leftOffset = ((row + 1) * stride) * 4;
+        const rightOffset = ((row + 1) * stride + width + 1) * 4;
+        const outputOffset = (row * width + column) * 4;
+        for (let channel = 0; channel < 3; channel += 1) {
+          repaired.data[outputOffset + channel] = Math.round((
+            boundary.data[topOffset + channel] * topWeight
+            + boundary.data[bottomOffset + channel] * bottomWeight
+            + boundary.data[leftOffset + channel] * leftWeight
+            + boundary.data[rightOffset + channel] * rightWeight
+          ) / weight);
+        }
+        repaired.data[outputOffset + 3] = opacity;
+      }
+    }
+    outputContext.putImageData(repaired, x, y);
+  } catch {
+    // The preview remains editable if the browser temporarily has no readable video frame.
+  }
+}
+
+function normalizeEffectMaskKeyframes(effect: EditorEffect, start: number, end: number) {
+  if (effect.kind !== "watermark" && effect.kind !== "ai-watermark") return undefined;
+  const source: VideoEffectMaskKeyframe[] = effect.maskKeyframes?.length
+    ? effect.maskKeyframes
+    : [{
+        id: `${effect.id}-mask-start`,
+        time: start,
+        ...(effect.mask || { x: 50, y: 50, width: 24, height: 14 })
+      }];
+  const normalized = source.map((keyframe) => ({
+    ...normalizeEffectMask(keyframe),
+    id: keyframe.id || createEditorId("effect-mask"),
+    time: roundTimelineFrame(clampValue(keyframe.time, start, end))
+  })).sort((left, right) => left.time - right.time);
+  return normalized.filter((keyframe, index) => (
+    index === normalized.length - 1 || Math.abs(keyframe.time - normalized[index + 1].time) > 0.0005
+  ));
+}
+
 function normalizeEditorEffect(effect: EditorEffect, projectDuration: number): EditorEffect {
   const maximumDuration = Math.max(minimumTimelineClipDuration, projectDuration);
   const start = clampValue(Number.isFinite(effect.start) ? effect.start : 0, 0, Math.max(0, maximumDuration - minimumTimelineClipDuration));
   const end = clampValue(Number.isFinite(effect.end) ? effect.end : maximumDuration, start + minimumTimelineClipDuration, maximumDuration);
-  return {
+  const normalized: EditorEffect = {
     ...effect,
     start,
     end,
@@ -941,9 +1074,39 @@ function normalizeEditorEffect(effect: EditorEffect, projectDuration: number): E
     speed: clampValue(Number.isFinite(effect.speed) ? effect.speed : 1, 0.1, 4),
     density: clampValue(Number.isFinite(effect.density) ? effect.density : 50, 0, 100),
     mask: effectIsLocal(effect)
-      ? normalizeEffectMask(effect.mask || { x: 50, y: 50, width: 35, height: 35 })
-      : undefined
+      ? normalizeEffectMask(effect.mask || {
+          x: 50,
+          y: 50,
+          width: effect.kind === "watermark" || effect.kind === "ai-watermark" ? 24 : 35,
+          height: effect.kind === "watermark" || effect.kind === "ai-watermark" ? 14 : 35
+        })
+      : undefined,
+    removalMode: effect.kind === "watermark" ? "repair" : undefined,
+    maskKeyframes: undefined
   };
+  normalized.maskKeyframes = normalizeEffectMaskKeyframes(normalized, start, end);
+  return normalized;
+}
+
+function withEffectMaskAtTime(
+  effect: EditorEffect,
+  time: number,
+  mask: VideoEffectMask,
+  requestedKeyframeId?: string
+): EditorEffect {
+  const normalizedMask = normalizeEffectMask(mask);
+  if (effect.kind !== "watermark" && effect.kind !== "ai-watermark") return { ...effect, mask: normalizedMask };
+  const keyframeTime = roundTimelineFrame(clampValue(time, effect.start, effect.end));
+  const keyframes = [...(effect.maskKeyframes || [])];
+  const index = keyframes.findIndex((keyframe) => (
+    keyframe.id === requestedKeyframeId || Math.abs(keyframe.time - keyframeTime) <= 0.5 / timelineFps
+  ));
+  const keyframeId = requestedKeyframeId || keyframes[index]?.id || createEditorId("effect-mask");
+  const nextKeyframe = { id: keyframeId, time: keyframeTime, ...normalizedMask };
+  if (index >= 0) keyframes[index] = nextKeyframe;
+  else keyframes.push(nextKeyframe);
+  keyframes.sort((left, right) => left.time - right.time);
+  return { ...effect, mask: normalizedMask, maskKeyframes: keyframes };
 }
 
 function seededEffectRandom(seed: number, index: number, salt: number) {
@@ -2019,6 +2182,9 @@ export default function LosslessVideoPage() {
   const subtitleInputRef = useRef<HTMLInputElement | null>(null);
   const videoCoverInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const watermarkPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const watermarkSourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const watermarkPreviewPainterRef = useRef<() => void>(() => undefined);
   const videoAudioGraphRef = useRef<VideoAudioGraph | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const videoTransformOverlayRef = useRef<HTMLDivElement | null>(null);
@@ -2057,6 +2223,7 @@ export default function LosslessVideoPage() {
   const draggedEffectKindRef = useRef<VideoEffectKind | null>(null);
   const trackDragMovedRef = useRef(false);
   const audioSeparationStatusRequestRef = useRef(0);
+  const watermarkRemovalStatusRequestRef = useRef(0);
   const projectSourceInitializedRef = useRef(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoInput, setVideoInput] = useState<VideoInput | null>(null);
@@ -2102,6 +2269,8 @@ export default function LosslessVideoPage() {
   const [subtitlePreferences, setSubtitlePreferences] = useState<SubtitlePreferences>(storedSettingsRef.current.subtitle);
   const [subtitleEngineStatus, setSubtitleEngineStatus] = useState<SubtitleEngineStatus | null>(null);
   const [subtitleEngineStatusLoading, setSubtitleEngineStatusLoading] = useState(false);
+  const [watermarkRemovalStatus, setWatermarkRemovalStatus] = useState<WatermarkRemovalStatus | null>(null);
+  const [watermarkRemovalStatusLoading, setWatermarkRemovalStatusLoading] = useState(false);
   const [status, setStatus] = useState<TaskStatus>("idle");
   const [progress, setProgress] = useState<ProgressState>({ percent: 0, label: "等待视频", detail: "选择合成长视频后开始检测" });
   const [segments, setSegments] = useState<DuplicateSegment[]>([]);
@@ -2165,6 +2334,30 @@ export default function LosslessVideoPage() {
       });
     } finally {
       setSubtitleEngineStatusLoading(false);
+    }
+  };
+
+  const checkWatermarkRemovalStatus = async () => {
+    const requestId = watermarkRemovalStatusRequestRef.current + 1;
+    watermarkRemovalStatusRequestRef.current = requestId;
+    setWatermarkRemovalStatusLoading(true);
+    try {
+      const nextStatus = await getWatermarkRemovalStatus();
+      if (watermarkRemovalStatusRequestRef.current === requestId) {
+        setWatermarkRemovalStatus(nextStatus);
+      }
+    } catch (statusError) {
+      if (watermarkRemovalStatusRequestRef.current === requestId) {
+        setWatermarkRemovalStatus({
+          available: false,
+          modelReady: false,
+          message: statusError instanceof Error ? statusError.message : "无法连接时序去水印引擎"
+        });
+      }
+    } finally {
+      if (watermarkRemovalStatusRequestRef.current === requestId) {
+        setWatermarkRemovalStatusLoading(false);
+      }
     }
   };
 
@@ -2368,7 +2561,7 @@ export default function LosslessVideoPage() {
   }, [audioSeparation, params, subtitlePreferences]);
 
   useEffect(() => {
-    const isRunning = status === "detecting" || status === "transcribing" || status === "separating" || status === "exporting";
+    const isRunning = status === "detecting" || status === "transcribing" || status === "separating" || status === "inpainting" || status === "exporting";
     if (isRunning) {
       const now = Date.now();
       setStepStartedAt(now);
@@ -2382,7 +2575,7 @@ export default function LosslessVideoPage() {
   }, [progress.label, status]);
 
   useEffect(() => {
-    if (status !== "detecting" && status !== "transcribing" && status !== "exporting") return;
+    if (status !== "detecting" && status !== "transcribing" && status !== "separating" && status !== "inpainting" && status !== "exporting") return;
     const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [status]);
@@ -2394,6 +2587,11 @@ export default function LosslessVideoPage() {
   );
   const enabledTracks = useMemo(() => tracks.filter((track) => track.enabled), [tracks]);
   const enabledEffects = useMemo(() => effects.filter((effect) => effect.enabled), [effects]);
+  const exportableEffects = useMemo(() => enabledEffects.filter((effect) => effect.kind !== "ai-watermark"), [enabledEffects]);
+  const visualEffects = useMemo(() => effects.filter((effect) => effect.kind !== "ai-watermark"), [effects]);
+  const watermarkEffects = useMemo(() => effects.filter((effect) => effect.kind === "ai-watermark"), [effects]);
+  const enabledVisualEffects = useMemo(() => visualEffects.filter((effect) => effect.enabled), [visualEffects]);
+  const enabledWatermarkEffects = useMemo(() => watermarkEffects.filter((effect) => effect.enabled), [watermarkEffects]);
   const enabledSubtitleTracks = useMemo(() => subtitleTracks.filter((track) => track.enabled && track.cues.length), [subtitleTracks]);
   const importedResources = useMemo<ImportedResource[]>(() => [...videoSources, ...mediaResources], [mediaResources, videoSources]);
   const usedVideoSourceIds = useMemo(() => new Set(videoClips.map((clip) => clip.sourceId)), [videoClips]);
@@ -2428,6 +2626,20 @@ export default function LosslessVideoPage() {
     () => effects.find((effect) => effect.id === selectedEffectId),
     [effects, selectedEffectId]
   );
+  const selectedEffectMaskKeyframes = useMemo(
+    () => selectedEffect?.kind === "watermark" || selectedEffect?.kind === "ai-watermark"
+      ? [...(selectedEffect.maskKeyframes || [])].sort((left, right) => left.time - right.time)
+      : [],
+    [selectedEffect]
+  );
+  const selectedEffectMaskKeyframe = useMemo(
+    () => selectedEffectMaskKeyframes.find((keyframe) => keyframe.id === selectedKeyframeId),
+    [selectedEffectMaskKeyframes, selectedKeyframeId]
+  );
+  const selectedEffectDisplayMask = useMemo(
+    () => selectedEffect ? effectMaskAtTime(selectedEffect, currentTime) : undefined,
+    [currentTime, selectedEffect]
+  );
   const activeEffects = useMemo(
     () => enabledEffects
       .filter((effect) => currentTime >= effect.start - 0.0005 && currentTime < effect.end - 0.0005)
@@ -2436,7 +2648,10 @@ export default function LosslessVideoPage() {
         const rightLayer = timelineLaneOrder.indexOf(right.laneId || effectLaneId);
         return (rightLayer < 0 ? timelineLaneOrder.length : rightLayer)
           - (leftLayer < 0 ? timelineLaneOrder.length : leftLayer);
-      }),
+      })
+      .map((effect) => effectIsLocal(effect)
+        ? { ...effect, mask: effectMaskAtTime(effect, currentTime) }
+        : effect),
     [currentTime, enabledEffects, timelineLaneOrder]
   );
   const activeVideoColor = useMemo(
@@ -2807,12 +3022,12 @@ export default function LosslessVideoPage() {
     setTimelineZoom((current) => Math.min(current, timelineMaxZoom));
   }, [timelineMaxZoom]);
 
-  const taskRunning = status === "detecting" || status === "transcribing" || status === "separating" || status === "exporting";
+  const taskRunning = status === "detecting" || status === "transcribing" || status === "separating" || status === "inpainting" || status === "exporting";
   const canRunTask = Boolean(videoInput) && videoClips.length > 0 && !taskRunning;
   const automaticSubtitleMode: SubtitleExportMode = enabledSubtitleTracks.length ? "burn" : "none";
   const automaticExportMode: LosslessCutMode = hasImageTracks
     || hasVideoColorAdjustments
-    || enabledEffects.length > 0
+    || exportableEffects.length > 0
     || hasExternalVideoSources
     || needsVideoComposition
     || projectCanvasChanged
@@ -2824,7 +3039,7 @@ export default function LosslessVideoPage() {
     : "keyframe-copy";
   const videoOutputReencoded = hasImageTracks
     || hasVideoColorAdjustments
-    || enabledEffects.length > 0
+    || exportableEffects.length > 0
     || hasExternalVideoSources
     || needsVideoComposition
     || projectCanvasChanged
@@ -2835,6 +3050,7 @@ export default function LosslessVideoPage() {
 
   const canExport = projectVideoDuration > 0
     && !taskRunning
+    && enabledWatermarkEffects.length === 0
     && (videoClips.length > 0 || enabledTracks.length > 0)
     && (!videoCover || Boolean(videoCover.file));
   const stepElapsed = stepStartedAt ? formatElapsed((stepFinishedAt || clockNow) - stepStartedAt) : "";
@@ -2867,6 +3083,93 @@ export default function LosslessVideoPage() {
     [previewVideoRect.height, previewVideoRect.width, selectedImageMotionKeyframes]
   );
 
+  watermarkPreviewPainterRef.current = () => {
+    const outputCanvas = watermarkPreviewCanvasRef.current;
+    if (!outputCanvas) return;
+    const cssWidth = Math.max(1, previewVideoRect.width);
+    const cssHeight = Math.max(1, previewVideoRect.height);
+    const rasterScale = Math.min(1, 1280 / cssWidth, 720 / cssHeight);
+    const canvasSize = {
+      width: Math.max(1, Math.round(cssWidth * rasterScale)),
+      height: Math.max(1, Math.round(cssHeight * rasterScale))
+    };
+    if (outputCanvas.width !== canvasSize.width) outputCanvas.width = canvasSize.width;
+    if (outputCanvas.height !== canvasSize.height) outputCanvas.height = canvasSize.height;
+    const outputContext = outputCanvas.getContext("2d", { alpha: true });
+    if (!outputContext) return;
+    outputContext.clearRect(0, 0, canvasSize.width, canvasSize.height);
+
+    const previewTime = timelineMaterialDragLockRef.current?.time ?? currentTimeRef.current;
+    const watermarkEffectsAtTime = effectsRef.current
+      .filter((effect) => (
+        effect.enabled
+        && effect.kind === "watermark"
+        && previewTime >= effect.start - 0.0005
+        && previewTime < effect.end - 0.0005
+      ))
+      .map((effect) => ({ ...effect, mask: effectMaskAtTime(effect, previewTime) }))
+      .filter((effect) => effect.mask);
+    if (!watermarkEffectsAtTime.length) return;
+    const video = videoRef.current;
+    if (!watermarkSourceCanvasRef.current) watermarkSourceCanvasRef.current = document.createElement("canvas");
+    const sourceCanvas = watermarkSourceCanvasRef.current;
+    if (sourceCanvas.width !== canvasSize.width) sourceCanvas.width = canvasSize.width;
+    if (sourceCanvas.height !== canvasSize.height) sourceCanvas.height = canvasSize.height;
+    const sourceContext = sourceCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
+    if (!sourceContext) return;
+    sourceContext.clearRect(0, 0, canvasSize.width, canvasSize.height);
+    sourceContext.fillStyle = "#000000";
+    sourceContext.fillRect(0, 0, canvasSize.width, canvasSize.height);
+    sourceContext.imageSmoothingEnabled = true;
+    sourceContext.imageSmoothingQuality = "high";
+
+    if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && activeVideoTransform) {
+      const drawWidth = canvasSize.width * activeVideoTransform.width / 100;
+      const drawHeight = canvasSize.height * activeVideoTransformHeight / 100;
+      const drawX = canvasSize.width * activeVideoTransform.x / 100 - drawWidth / 2;
+      const drawY = canvasSize.height * activeVideoTransform.y / 100 - drawHeight / 2;
+      try {
+        sourceContext.drawImage(video, drawX, drawY, drawWidth, drawHeight);
+      } catch {
+        return;
+      }
+    }
+
+    tracksRef.current
+      .filter((track): track is ImageEditorTrack => {
+        if (track.type !== "image" || !track.enabled || previewTime < track.start || previewTime > track.end) return false;
+        const trackLayer = timelineLayerByLane.get(getTrackLaneId(track)) ?? Number.POSITIVE_INFINITY;
+        return trackLayer < activeVideoLayer;
+      })
+      .sort((left, right) => (
+        (timelineLayerByLane.get(getTrackLaneId(right)) ?? Number.POSITIVE_INFINITY)
+        - (timelineLayerByLane.get(getTrackLaneId(left)) ?? Number.POSITIVE_INFINITY)
+      ))
+      .forEach((track) => {
+        const image = imageOverlayRefs.current.get(track.id)?.querySelector("img");
+        if (!(image instanceof HTMLImageElement) || !image.complete || !image.naturalWidth) return;
+        const transform = interpolateImageKeyframe(track, previewTime);
+        const width = canvasSize.width * transform.width / 100;
+        const height = canvasSize.height * resolveImageHeight(track, transform) / 100;
+        sourceContext.save();
+        sourceContext.globalAlpha = clampValue(transform.opacity ?? track.opacity, 0, 1);
+        sourceContext.translate(canvasSize.width * transform.x / 100, canvasSize.height * transform.y / 100);
+        sourceContext.rotate(transform.rotation * Math.PI / 180);
+        sourceContext.drawImage(image, -width / 2, -height / 2, width, height);
+        sourceContext.restore();
+      });
+
+    watermarkEffectsAtTime.forEach((effect) => {
+      paintWatermarkRepairRegion(outputContext, sourceContext, effect, videoSize, canvasSize);
+    });
+  };
+
+  useEffect(() => {
+    if (isPlaying) return;
+    const frame = window.requestAnimationFrame(() => watermarkPreviewPainterRef.current());
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeVideoTransform, activeVideoTransformHeight, activeVideoColor, activeVideoLayer, currentTime, effects, isPlaying, previewVideoRect, timelineLayerByLane, tracks, videoSize]);
+
   useEffect(() => {
     const video = videoRef.current as FrameSyncedVideo | null;
     if (!video || !previewUrl) return;
@@ -2888,6 +3191,7 @@ export default function LosslessVideoPage() {
         if (element.style.pointerEvents !== pointerEvents) element.style.pointerEvents = pointerEvents;
         if (active) paintImageTransform(element, interpolateImageKeyframe(track, projectTime), track);
       });
+      watermarkPreviewPainterRef.current();
     };
 
     const paintPausedFrame = () => paintFrame();
@@ -4889,7 +5193,46 @@ export default function LosslessVideoPage() {
     if (historySnapshot) pushEditorHistory(historySnapshot);
   };
 
-  const addVideoEffect = (kind: VideoEffectKind, requestedStart: number, requestedEnd: number) => {
+  const addWatermarkMaskKeyframe = (effectId: string) => {
+    const effect = effectsRef.current.find((item) => item.id === effectId && (item.kind === "watermark" || item.kind === "ai-watermark"));
+    if (!effect) return;
+    const time = roundTimelineFrame(clampValue(currentTimeRef.current, effect.start, effect.end));
+    const mask = effectMaskAtTime(effect, time) || effect.mask;
+    if (!mask) return;
+    const existing = effect.maskKeyframes?.find((keyframe) => Math.abs(keyframe.time - time) <= 0.5 / timelineFps);
+    const id = existing?.id || createEditorId("effect-mask");
+    const changed = updateEffect(effectId, (current) => {
+      const keyframes = [...(current.maskKeyframes || [])];
+      const index = keyframes.findIndex((keyframe) => keyframe.id === id || Math.abs(keyframe.time - time) <= 0.5 / timelineFps);
+      const next = { id, time, ...mask };
+      if (index >= 0) keyframes[index] = next;
+      else keyframes.push(next);
+      return { ...current, mask, maskKeyframes: keyframes };
+    }, true);
+    if (changed || existing) setSelectedKeyframeId(id);
+  };
+
+  const removeWatermarkMaskKeyframe = (effectId: string, keyframeId: string) => {
+    const effect = effectsRef.current.find((item) => item.id === effectId && (item.kind === "watermark" || item.kind === "ai-watermark"));
+    if (!effect?.maskKeyframes?.length || effect.maskKeyframes.length <= 1) return;
+    const index = effect.maskKeyframes.findIndex((keyframe) => keyframe.id === keyframeId);
+    if (index < 0) return;
+    const nextSelection = effect.maskKeyframes[index - 1] || effect.maskKeyframes[index + 1];
+    if (updateEffect(effectId, (current) => ({
+      ...current,
+      maskKeyframes: current.maskKeyframes?.filter((keyframe) => keyframe.id !== keyframeId)
+    }), true)) {
+      setSelectedKeyframeId(nextSelection?.id || "");
+      if (nextSelection) seekPreview(nextSelection.time, false);
+    }
+  };
+
+  const addVideoEffect = (
+    kind: VideoEffectKind,
+    requestedStart: number,
+    requestedEnd: number,
+    requestedLaneId = effectLaneId
+  ) => {
     if (projectVideoDuration <= minimumTimelineClipDuration) {
       notify({ type: "warning", title: "无法添加特效", message: "请先把视频或图片素材添加到时间轴" });
       return false;
@@ -4897,7 +5240,7 @@ export default function LosslessVideoPage() {
     const definition = videoEffectDefinitions.find((item) => item.kind === kind)!;
     const start = roundTimelineFrame(clampValue(requestedStart, 0, projectVideoDuration - minimumTimelineClipDuration));
     const end = roundTimelineFrame(clampValue(requestedEnd, start + minimumTimelineClipDuration, projectVideoDuration));
-    const defaultLaneEffects = effectsRef.current.filter((effect) => (effect.laneId || effectLaneId) === effectLaneId);
+    const defaultLaneEffects = effectsRef.current.filter((effect) => (effect.laneId || effectLaneId) === requestedLaneId);
     if (timelineRangeOverlaps(defaultLaneEffects, start, end, "")) {
       notify({ type: "warning", title: "该位置已有特效", message: "同一条特效轨中的素材不能重叠，请拖到空白位置" });
       return false;
@@ -4905,24 +5248,27 @@ export default function LosslessVideoPage() {
     const historySnapshot = captureEditorSnapshot();
     const effect: EditorEffect = normalizeEditorEffect({
       id: createEditorId("effect"),
-      laneId: effectLaneId,
+      laneId: requestedLaneId,
       kind,
       name: definition.name,
       start,
       end,
       enabled: true,
-      intensity: kind === "mosaic" ? 0.65 : 0.5,
+      intensity: kind === "mosaic" ? 0.65 : kind === "watermark" || kind === "ai-watermark" ? 0.45 : 0.5,
       opacity: effectIsLocal({ kind }) ? 1 : 0.78,
       speed: 1,
       density: 55,
       seed: Math.max(1, Math.floor(Date.now() % 2147483647)),
-      mask: effectIsLocal({ kind }) ? { x: 50, y: 50, width: 35, height: 35 } : undefined
+      mask: effectIsLocal({ kind })
+        ? { x: 50, y: 50, width: kind === "watermark" || kind === "ai-watermark" ? 24 : 35, height: kind === "watermark" || kind === "ai-watermark" ? 14 : 35 }
+        : undefined,
+      removalMode: kind === "watermark" ? "repair" : undefined
     }, projectVideoDuration);
     const nextEffects = [...effectsRef.current, effect];
     effectsRef.current = nextEffects;
     setEffects(nextEffects);
-    if (!timelineLaneOrderRef.current.includes(effectLaneId)) {
-      const nextLaneOrder = [effectLaneId, ...timelineLaneOrderRef.current];
+    if (!timelineLaneOrderRef.current.includes(requestedLaneId)) {
+      const nextLaneOrder = [requestedLaneId, ...timelineLaneOrderRef.current];
       timelineLaneOrderRef.current = nextLaneOrder;
       setTimelineLaneOrder(nextLaneOrder);
     }
@@ -4930,12 +5276,246 @@ export default function LosslessVideoPage() {
     setSelectedVideoClipId("");
     setSelectedTrackId("");
     setSelectedEffectId(effect.id);
-    setSelectedLaneId(effectLaneId);
+    setSelectedLaneId(requestedLaneId);
     setSelectedKeyframeId("");
-    setInspectorTab("effects");
+    setInspectorTab(inspectorTabForEffect(effect));
     seekPreview(effect.start, false);
     pushEditorHistory(historySnapshot);
     return true;
+  };
+
+  const startWatermarkRemoval = () => {
+    if (projectVideoDuration <= minimumTimelineClipDuration) {
+      notify({ type: "warning", title: "无法去水印", message: "请先把视频或图片素材添加到时间轴" });
+      return;
+    }
+    const playhead = roundTimelineFrame(clampValue(currentTimeRef.current, 0, projectVideoDuration));
+    const currentEffect = effectsRef.current.find((effect) => (
+      effect.kind === "ai-watermark"
+      && playhead >= effect.start - 0.0005
+      && playhead < effect.end - 0.0005
+    ));
+    if (currentEffect) {
+      setSelectedResourceId("");
+      setSelectedVideoClipId("");
+      setSelectedTrackId("");
+      setSelectedEffectId(currentEffect.id);
+      setSelectedLaneId(currentEffect.laneId || effectLaneId);
+      setSelectedKeyframeId("");
+      setInspectorTab("watermark");
+      if (!currentEffect.enabled) {
+        updateEffect(currentEffect.id, (effect) => ({ ...effect, enabled: true }), true);
+      }
+      return;
+    }
+
+    const sourceClip = findVideoClipAtTime(videoClipsRef.current, playhead, timelineLaneOrderRef.current);
+    if (!sourceClip) {
+      notify({ type: "warning", title: "无法去水印", message: "请把播放头放到需要处理的视频素材上" });
+      return;
+    }
+
+    const defaultLaneEffects = effectsRef.current.filter((effect) => (effect.laneId || effectLaneId) === effectLaneId);
+    const defaultSlot = resolveEffectDropSlot(defaultLaneEffects, "ai-watermark", playhead, sourceClip.end);
+    const laneId = defaultSlot.valid ? effectLaneId : createEditorId("effect-lane");
+    const slot = defaultSlot.valid
+      ? defaultSlot
+      : resolveEffectDropSlot([], "ai-watermark", playhead, sourceClip.end);
+    if (!slot.valid) {
+      notify({ type: "warning", title: "无法去水印", message: "播放头后方没有足够的时间范围" });
+      return;
+    }
+    addVideoEffect("ai-watermark", slot.start, slot.end, laneId);
+  };
+
+  const applySelectedWatermarkRemoval = async () => {
+    if (taskRunning) return;
+    const effect = effectsRef.current.find((item) => item.id === selectedEffectId && item.kind === "ai-watermark");
+    if (!effect?.mask) {
+      startWatermarkRemoval();
+      return;
+    }
+    const midpoint = effect.start + (effect.end - effect.start) / 2;
+    const clip = findVideoClipAtTime(videoClipsRef.current, midpoint, timelineLaneOrderRef.current);
+    const source = videoSourcesRef.current.find((item) => item.id === clip?.sourceId);
+    if (!clip || !source) {
+      notify({ type: "warning", title: "无法开始去水印", message: "水印区间下方没有可处理的视频素材" });
+      return;
+    }
+    if (effect.start < clip.start - 0.001 || effect.end > clip.end + 0.001) {
+      notify({
+        type: "warning",
+        title: "请调整去水印区间",
+        message: "一次生成只能位于一个视频片段内，请把去水印素材的首尾收进当前视频片段"
+      });
+      return;
+    }
+
+    const repairStart = roundTimelineFrame(Math.max(effect.start, clip.start));
+    const repairEnd = roundTimelineFrame(Math.min(effect.end, clip.end));
+    const repairDuration = repairEnd - repairStart;
+    if (repairDuration < minimumTimelineClipDuration) return;
+    const sourceStart = clip.sourceStart + repairStart - clip.start;
+    const sourceEnd = sourceStart + repairDuration;
+    const historySnapshot = captureEditorSnapshot();
+    const nextTaskId = createVideoTaskId();
+    setTaskId(nextTaskId);
+    setStatus("inpainting");
+    setError("");
+    setProgress({ percent: 1, label: "准备时序去水印", detail: `正在准备 ${source.name}` });
+    abortRef.current = new AbortController();
+    const taskWatcher = watchVideoTask(nextTaskId, (info) => {
+      if (info.status === "failed") setError(info.message || "时序去水印失败");
+      setProgress({
+        percent: clampPercent(info.progress),
+        label: info.stage || "时序去水印",
+        detail: info.message || "正在重建水印区域"
+      });
+    });
+
+    try {
+      let engineStatus = watermarkRemovalStatus;
+      if (!engineStatus?.available) {
+        engineStatus = await getWatermarkRemovalStatus();
+        setWatermarkRemovalStatus(engineStatus);
+      }
+      if (!engineStatus.available) throw new Error(engineStatus.message || "时序去水印引擎不可用");
+      const response = await applyWatermarkRemovalToAsset(
+        nextTaskId,
+        source.file,
+        {
+          sourceStart,
+          sourceEnd,
+          outputName: source.name,
+          quality: "high",
+          mask: { ...effect.mask },
+          maskKeyframes: (effect.maskKeyframes || []).map((keyframe) => ({
+            ...keyframe,
+            time: clampValue(keyframe.time - repairStart, 0, repairDuration)
+          }))
+        },
+        abortRef.current.signal,
+        (fraction) => setProgress((current) => current.percent > 7 ? current : {
+          percent: 1 + Math.round(fraction * 6),
+          label: "上传视频片段",
+          detail: `正在上传 ${Math.round(fraction * 100)}%`
+        })
+      );
+      setProgress({ percent: 98, label: "回填时间轴", detail: "正在载入高质量修复片段" });
+      const outputBlob = await downloadVideoOutputBlob(response.taskId || nextTaskId, abortRef.current.signal);
+      const baseName = source.name.replace(/\.[^.]+$/, "");
+      const outputName = `${baseName} - 已去水印.mp4`;
+      const outputFile = new File([outputBlob], outputName, { type: outputBlob.type || "video/mp4", lastModified: Date.now() });
+      const outputPreviewUrl = URL.createObjectURL(outputFile);
+      const metadata = await readVideoMetadata(outputPreviewUrl);
+      if (metadata.duration <= 0.01) {
+        URL.revokeObjectURL(outputPreviewUrl);
+        throw new Error("无法读取去水印结果，请重新生成");
+      }
+      const thumbnailUrl = await createVideoThumbnail(outputPreviewUrl, metadata.duration);
+      const outputSourceId = createEditorId("video-source");
+      const outputSource: VideoEditorSource = {
+        id: outputSourceId,
+        type: "video",
+        name: outputName,
+        file: outputFile,
+        previewUrl: outputPreviewUrl,
+        thumbnailUrl,
+        duration: metadata.duration,
+        width: metadata.width || source.width,
+        height: metadata.height || source.height,
+        hasAudio: metadata.hasAudio && source.hasAudio,
+        audioPeaks: metadata.hasAudio ? createAudioPresencePeaks(mediaFileIdentity(outputFile)) : [],
+        primary: false
+      };
+
+      const currentClip = videoClipsRef.current.find((item) => item.id === clip.id);
+      if (!currentClip) {
+        URL.revokeObjectURL(outputPreviewUrl);
+        throw new Error("原视频片段已不存在，请重新生成");
+      }
+      const sourceTimeAt = (projectTime: number) => currentClip.sourceStart + projectTime - currentClip.start;
+      const replacementClip: VideoEditorClip = {
+        ...cloneVideoEditorClip(currentClip),
+        id: createEditorId("video-clip"),
+        sourceId: outputSourceId,
+        name: outputName,
+        start: repairStart,
+        end: repairEnd,
+        sourceStart: 0,
+        sourceEnd: Math.min(metadata.duration, repairDuration),
+        sourceMin: 0,
+        sourceMax: metadata.duration
+      };
+      const replacementParts: VideoEditorClip[] = [];
+      if (repairStart > currentClip.start + 0.5 / timelineFps) {
+        replacementParts.push({
+          ...cloneVideoEditorClip(currentClip),
+          end: repairStart,
+          sourceEnd: sourceTimeAt(repairStart),
+          sourceMax: sourceTimeAt(repairStart)
+        });
+      }
+      replacementParts.push(replacementClip);
+      if (repairEnd < currentClip.end - 0.5 / timelineFps) {
+        replacementParts.push({
+          ...cloneVideoEditorClip(currentClip),
+          id: createEditorId("video-clip"),
+          start: repairEnd,
+          sourceStart: sourceTimeAt(repairEnd),
+          sourceMin: sourceTimeAt(repairEnd)
+        });
+      }
+
+      const nextSources = [...videoSourcesRef.current, outputSource];
+      const nextClips = videoClipsRef.current.flatMap((item) => item.id === currentClip.id ? replacementParts : [item]);
+      const nextEffects = effectsRef.current.filter((item) => item.id !== effect.id);
+      const nextLaneOrder = mergeTimelineLaneOrder(
+        timelineLaneOrderRef.current,
+        nextClips,
+        tracksRef.current,
+        nextEffects,
+        subtitleTracksRef.current
+      );
+      videoSourcesRef.current = nextSources;
+      videoClipsRef.current = nextClips;
+      effectsRef.current = nextEffects;
+      timelineLaneOrderRef.current = nextLaneOrder;
+      setVideoSources(nextSources);
+      setVideoClips(nextClips);
+      setEffects(nextEffects);
+      setTimelineLaneOrder(nextLaneOrder);
+      setSelectedResourceId("");
+      setSelectedVideoClipId(replacementClip.id);
+      setSelectedTrackId("");
+      setSelectedEffectId("");
+      setSelectedKeyframeId("");
+      setSelectedLaneId(replacementClip.laneId);
+      setInspectorTab("tracks");
+      activeVideoClipIdRef.current = replacementClip.id;
+      setActiveVideoClipId(replacementClip.id);
+      setPreviewUrl(outputPreviewUrl);
+      pushEditorHistory(historySnapshot);
+      resetResult();
+      setWatermarkRemovalStatus((current) => current ? {
+        ...current,
+        modelReady: true,
+        message: response.message || current.message
+      } : current);
+      setStatus("done");
+      setProgress({ percent: 100, label: "去水印完成", detail: "修复片段已替换到时间轴，可继续剪辑或撤销" });
+      window.requestAnimationFrame(() => seekPreview(repairStart, false, false));
+    } catch (processingError) {
+      const cancelled = abortRef.current?.signal.aborted;
+      const message = processingError instanceof Error ? processingError.message : "时序去水印失败";
+      setStatus(cancelled ? "cancelled" : "error");
+      setError(cancelled ? "" : message);
+      setProgress({ percent: 0, label: cancelled ? "已取消" : "去水印失败", detail: cancelled ? "时序修复已停止" : message });
+      if (!cancelled) notify({ type: "error", title: "去水印失败", message });
+    } finally {
+      taskWatcher.close();
+      abortRef.current = null;
+    }
   };
 
   const removeVideoEffect = (effectId: string) => {
@@ -4950,6 +5530,54 @@ export default function LosslessVideoPage() {
     setTimelineLaneOrder(nextLaneOrder);
     if (!nextEffects.some((item) => (item.laneId || effectLaneId) === (effect.laneId || effectLaneId))) setSelectedLaneId("");
     if (selectedEffectId === effectId) setSelectedEffectId("");
+    pushEditorHistory(historySnapshot);
+  };
+
+  const duplicateVideoEffect = (effectId: string) => {
+    const effect = effectsRef.current.find((item) => item.id === effectId);
+    if (!effect) return;
+    const laneId = effect.laneId || effectLaneId;
+    const duration = effect.end - effect.start;
+    const laneEffects = effectsRef.current.filter((item) => (item.laneId || effectLaneId) === laneId);
+    const playhead = roundTimelineFrame(clampValue(currentTimeRef.current, 0, projectVideoDuration));
+    const playheadEffect = [...laneEffects]
+      .sort((left, right) => left.start - right.start)
+      .find((item) => playhead >= item.start - 0.001 && playhead < item.end - 0.001);
+    const preferredStart = playheadEffect ? playheadEffect.end : playhead;
+    const availableStart = findAvailableClipStart(laneEffects, preferredStart, duration, projectVideoDuration);
+    if (availableStart === undefined) {
+      notify({
+        type: "warning",
+        title: "无法复制特效",
+        message: "播放头之后没有足够的同轨空白区域"
+      });
+      return;
+    }
+
+    const historySnapshot = captureEditorSnapshot();
+    const start = roundTimelineFrame(availableStart);
+    const timeOffset = start - effect.start;
+    const duplicated = normalizeEditorEffect({
+      ...cloneEditorEffect(effect),
+      id: createEditorId("effect"),
+      start,
+      end: roundTimelineFrame(start + duration),
+      maskKeyframes: effect.maskKeyframes?.map((keyframe) => ({
+        ...keyframe,
+        id: createEditorId("effect-mask"),
+        time: roundTimelineFrame(keyframe.time + timeOffset)
+      }))
+    }, projectVideoDuration);
+    const nextEffects = [...effectsRef.current, duplicated];
+    effectsRef.current = nextEffects;
+    setEffects(nextEffects);
+    setSelectedResourceId("");
+    setSelectedVideoClipId("");
+    setSelectedTrackId("");
+    setSelectedEffectId(duplicated.id);
+    setSelectedLaneId(laneId);
+    setSelectedKeyframeId("");
+    setInspectorTab(inspectorTabForEffect(duplicated));
     pushEditorHistory(historySnapshot);
   };
 
@@ -4991,7 +5619,7 @@ export default function LosslessVideoPage() {
     setSelectedEffectId(effect.id);
     setSelectedLaneId(originalLaneId);
     setSelectedKeyframeId("");
-    setInspectorTab("effects");
+    setInspectorTab(inspectorTabForEffect(effect));
     markTimelineLaneDropTarget();
     clipElement?.classList.add("is-dragging", action === "move" ? "is-moving" : "is-trimming");
     const move = (moveEvent: PointerEvent) => {
@@ -5039,7 +5667,17 @@ export default function LosslessVideoPage() {
             laneDrop.kind === "existing" ? targetLaneId : "",
             laneDrop.kind === "create" ? laneDrop.insertionIndex : undefined
           );
-          return { ...current, laneId: targetLaneId, start, end };
+          const timeOffset = start - effect.start;
+          return {
+            ...current,
+            laneId: targetLaneId,
+            start,
+            end,
+            maskKeyframes: effect.maskKeyframes?.map((keyframe) => ({
+              ...keyframe,
+              time: roundTimelineFrame(keyframe.time + timeOffset)
+            }))
+          };
         }
         if (action === "trim-start") {
           return {
@@ -5086,9 +5724,10 @@ export default function LosslessVideoPage() {
   const startEffectMaskTransform = (
     event: ReactPointerEvent<HTMLElement>,
     effect: EditorEffect,
-    action: "move" | "resize"
+    action: EffectMaskTransformAction
   ) => {
-    if (!effect.mask || event.button !== 0) return;
+    const displayedMask = effectMaskAtTime(effect, currentTimeRef.current);
+    if (!displayedMask || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     const stage = event.currentTarget.closest(".lossless-media-overlay") as HTMLElement | null;
@@ -5096,7 +5735,11 @@ export default function LosslessVideoPage() {
     const stageRect = stage.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    const initialMask = { ...effect.mask };
+    const initialMask = { ...displayedMask };
+    const keyframeTime = roundTimelineFrame(clampValue(currentTimeRef.current, effect.start, effect.end));
+    const existingKeyframe = effect.maskKeyframes?.find((keyframe) => Math.abs(keyframe.time - keyframeTime) <= 0.5 / timelineFps);
+    const keyframeId = existingKeyframe?.id || createEditorId("effect-mask");
+    if (effect.kind === "watermark" || effect.kind === "ai-watermark") setSelectedKeyframeId(keyframeId);
     const historySnapshot = captureEditorSnapshot();
     let changed = false;
     const move = (moveEvent: PointerEvent) => {
@@ -5118,13 +5761,39 @@ export default function LosslessVideoPage() {
           mask = normalizeEffectMask({ ...initialMask, x: snapped.x, y: snapped.y });
         } else {
           clearCanvasSnapGuides();
+          const handle = action.slice("resize-".length) as EffectMaskResizeHandle;
+          const minimumSize = 2;
+          const initialLeft = initialMask.x - initialMask.width / 2;
+          const initialRight = initialMask.x + initialMask.width / 2;
+          const initialTop = initialMask.y - initialMask.height / 2;
+          const initialBottom = initialMask.y + initialMask.height / 2;
+          const left = handle.includes("w")
+            ? clampValue(initialLeft + dx, 0, initialRight - minimumSize)
+            : initialLeft;
+          const right = handle.includes("e")
+            ? clampValue(initialRight + dx, initialLeft + minimumSize, 100)
+            : initialRight;
+          const top = handle.includes("n")
+            ? clampValue(initialTop + dy, 0, initialBottom - minimumSize)
+            : initialTop;
+          const bottom = handle.includes("s")
+            ? clampValue(initialBottom + dy, initialTop + minimumSize, 100)
+            : initialBottom;
           mask = normalizeEffectMask({
-              ...initialMask,
-              width: Math.max(2, initialMask.width + dx * 2),
-              height: Math.max(2, initialMask.height + dy * 2)
-            });
+            x: (left + right) / 2,
+            y: (top + bottom) / 2,
+            width: right - left,
+            height: bottom - top
+          });
         }
-        return { ...current, mask };
+        if (current.kind !== "watermark" && current.kind !== "ai-watermark") return { ...current, mask };
+        const keyframes = [...(current.maskKeyframes || [])];
+        const index = keyframes.findIndex((keyframe) => keyframe.id === keyframeId || Math.abs(keyframe.time - keyframeTime) <= 0.5 / timelineFps);
+        const nextKeyframe = { id: keyframeId, time: keyframeTime, ...mask };
+        if (index >= 0) keyframes[index] = nextKeyframe;
+        else keyframes.push(nextKeyframe);
+        keyframes.sort((left, right) => left.time - right.time);
+        return { ...current, mask, maskKeyframes: keyframes };
       }) || changed;
     };
     const finish = () => {
@@ -6541,8 +7210,8 @@ export default function LosslessVideoPage() {
     setStatus("exporting");
     setError("");
     setProgress({ percent: 15, label: "导出中", detail: automaticExportMode === "keyframe-copy" ? "画面无需重编码，正在准备原码流输出" : "正在准备最高质量精确输出" });
-    if (enabledTracks.length || enabledEffects.length || hasVideoEdits || hasVideoColorAdjustments) {
-      setProgress({ percent: 15, label: "导出中", detail: `正在准备 ${videoClips.length + enabledTracks.length + enabledEffects.length} 个时间轴项目` });
+    if (enabledTracks.length || exportableEffects.length || hasVideoEdits || hasVideoColorAdjustments) {
+      setProgress({ percent: 15, label: "导出中", detail: `正在准备 ${videoClips.length + enabledTracks.length + exportableEffects.length} 个时间轴项目` });
     }
     abortRef.current = new AbortController();
     let taskWatcher: ReturnType<typeof watchVideoTask> | undefined;
@@ -6562,7 +7231,7 @@ export default function LosslessVideoPage() {
       });
       const hasProjectEdits = Boolean(
         enabledTracks.length
-        || enabledEffects.length
+        || exportableEffects.length
         || hasVideoEdits
         || hasVideoColorAdjustments
         || hasVideoAudioAdjustments
@@ -6666,11 +7335,12 @@ export default function LosslessVideoPage() {
         }));
       });
       const exportEffects = [
-        ...enabledEffects
+        ...exportableEffects
           .sort((left, right) => laneLayer(right.laneId || effectLaneId) - laneLayer(left.laneId || effectLaneId))
           .map(({ laneId: _laneId, name: _name, ...effect }) => ({
             ...effect,
-            mask: effect.mask ? { ...effect.mask } : undefined
+            mask: effect.mask ? { ...effect.mask } : undefined,
+            maskKeyframes: effect.maskKeyframes?.map((keyframe) => ({ ...keyframe }))
           })),
         ...subtitleBackgroundEffects
       ];
@@ -7363,7 +8033,7 @@ export default function LosslessVideoPage() {
     return () => window.removeEventListener("keydown", handleShortcut);
   });
 
-  const statusIcon = status === "detecting" || status === "transcribing" || status === "separating" || status === "exporting" ? <Loader2 className="spin" size={18} /> : status === "done" || status === "detected" ? <CheckCircle2 size={18} /> : status === "error" ? <XCircle size={18} /> : <ShieldCheck size={18} />;
+  const statusIcon = status === "detecting" || status === "transcribing" || status === "separating" || status === "inpainting" || status === "exporting" ? <Loader2 className="spin" size={18} /> : status === "done" || status === "detected" ? <CheckCircle2 size={18} /> : status === "error" ? <XCircle size={18} /> : <ShieldCheck size={18} />;
   const contextMenuTarget = mediaContextMenu?.target;
   const contextMenuResource = contextMenuTarget?.kind === "resource"
     ? importedResources.find((resource) => resource.id === contextMenuTarget.resourceId)
@@ -7383,6 +8053,9 @@ export default function LosslessVideoPage() {
     : undefined;
   const contextMenuSubtitleCue = contextMenuTarget?.kind === "subtitle-cue"
     ? contextMenuSubtitleTrack?.cues.find((cue) => cue.id === contextMenuTarget.cueId)
+    : undefined;
+  const contextMenuEffect = contextMenuTarget?.kind === "effect"
+    ? effects.find((effect) => effect.id === contextMenuTarget.effectId)
     : undefined;
   const contextMenuSubtitleTime = contextMenuTarget?.kind === "subtitle-cue" && contextMenuSubtitleCue
     ? roundTimelineFrame(clampValue(contextMenuTarget.time, contextMenuSubtitleCue.start, contextMenuSubtitleCue.end))
@@ -7449,6 +8122,19 @@ export default function LosslessVideoPage() {
             <button className={inspectorTab === "subtitles" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "subtitles"} onClick={() => setInspectorTab("subtitles")}>
               <Captions size={16} />
               字幕
+            </button>
+            <button
+              className={inspectorTab === "watermark" ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={inspectorTab === "watermark"}
+              onClick={() => {
+                setInspectorTab("watermark");
+                if (!watermarkRemovalStatus && !watermarkRemovalStatusLoading) void checkWatermarkRemovalStatus();
+              }}
+            >
+              <Eraser size={16} />
+              去水印
             </button>
             <button className={inspectorTab === "effects" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "effects"} onClick={() => setInspectorTab("effects")}>
               <Sparkles size={16} />
@@ -7773,6 +8459,14 @@ export default function LosslessVideoPage() {
                               </button>
                             ))
                           : null}
+                        <canvas
+                          ref={watermarkPreviewCanvasRef}
+                          className="lossless-watermark-repair-preview"
+                          aria-hidden="true"
+                          style={{
+                            filter: videoColorIsDefault(activeVideoColor) ? undefined : "url(#lossless-active-video-grade)"
+                          }}
+                        />
                         {activeEffects.map((effect) => effectIsLocal(effect) && effect.mask ? (
                           <div
                             className={`lossless-local-effect-preview is-${effect.kind} ${selectedEffectId === effect.id ? "is-selected" : ""}`}
@@ -7780,14 +8474,18 @@ export default function LosslessVideoPage() {
                             role="button"
                             tabIndex={0}
                             aria-label={`调整${effect.name}区域`}
-                            title="拖动调整区域，拖动右下角调整大小"
+                            title="拖动调整区域，拖动四角调整大小"
                             style={{
                               left: `${effect.mask.x}%`,
                               top: `${effect.mask.y}%`,
                               width: `${effect.mask.width}%`,
                               height: `${effect.mask.height}%`,
                               opacity: effect.opacity,
-                              backdropFilter: effect.kind === "blur" ? `blur(${1 + effect.intensity * 18}px)` : `blur(${0.5 + effect.intensity * 2}px) contrast(${1 + effect.intensity * 0.35})`
+                              backdropFilter: effect.kind === "blur"
+                                ? `blur(${1 + effect.intensity * 18}px)`
+                                : effect.kind === "mosaic"
+                                  ? `blur(${0.5 + effect.intensity * 2}px) contrast(${1 + effect.intensity * 0.35})`
+                                  : "none"
                             }}
                             onPointerDown={(event) => {
                               setSelectedResourceId("");
@@ -7796,18 +8494,24 @@ export default function LosslessVideoPage() {
                               setSelectedEffectId(effect.id);
                               setSelectedLaneId(effect.laneId || effectLaneId);
                               setSelectedKeyframeId("");
-                              setInspectorTab("effects");
+                              setInspectorTab(inspectorTabForEffect(effect));
                               startEffectMaskTransform(event, effect, "move");
                             }}
                           >
+                            {effect.kind === "watermark" && selectedEffectId === effect.id ? (
+                              <span className="lossless-watermark-preview-label">去水印贴</span>
+                            ) : null}
                             {selectedEffectId === effect.id ? (
-                              <button
-                                className="lossless-local-effect-resize"
-                                type="button"
-                                title="调整特效区域大小"
-                                aria-label="调整特效区域大小"
-                                onPointerDown={(event) => startEffectMaskTransform(event, effect, "resize")}
-                              />
+                              effectMaskResizeHandles.map((handle) => (
+                                <button
+                                  className={`lossless-local-effect-resize is-${handle}`}
+                                  type="button"
+                                  key={handle}
+                                  title="调整去水印区域大小"
+                                  aria-label={`从 ${handle} 角调整去水印区域大小`}
+                                  onPointerDown={(event) => startEffectMaskTransform(event, effect, `resize-${handle}`)}
+                                />
+                              ))
                             ) : null}
                           </div>
                         ) : (
@@ -8127,7 +8831,9 @@ export default function LosslessVideoPage() {
                               setSelectedSubtitleTrackId(lane.type === "subtitle" ? lane.subtitleTrack?.id || "" : "");
                               setSelectedSubtitleCueId(lane.type === "subtitle" && lane.subtitleCues.length ? allSubtitleCuesSelectionId : "");
                               setSelectedKeyframeId("");
-                              setInspectorTab(lane.type === "effect" ? "effects" : lane.type === "subtitle" ? "subtitles" : "tracks");
+                              setInspectorTab(lane.type === "effect"
+                                ? lane.effects.some((effect) => effect.kind === "ai-watermark") ? "watermark" : "effects"
+                                : lane.type === "subtitle" ? "subtitles" : "tracks");
                             }
                           }}
                         >
@@ -8157,8 +8863,18 @@ export default function LosslessVideoPage() {
                               setSelectedEffectId(effect.id);
                               setSelectedLaneId(effect.laneId || effectLaneId);
                               setSelectedKeyframeId("");
-                              setInspectorTab("effects");
+                              setInspectorTab(inspectorTabForEffect(effect));
                               seekPreview(clampValue(timelineTimeAtPointer(event.currentTarget, event.clientX), effect.start, effect.end), false);
+                            }}
+                            onContextMenu={(event) => {
+                              setSelectedResourceId("");
+                              setSelectedVideoClipId("");
+                              setSelectedTrackId("");
+                              setSelectedEffectId(effect.id);
+                              setSelectedLaneId(effect.laneId || effectLaneId);
+                              setSelectedKeyframeId("");
+                              setInspectorTab(inspectorTabForEffect(effect));
+                              showMediaContextMenu(event, { kind: "effect", effectId: effect.id });
                             }}
                           >
                             <i
@@ -8169,7 +8885,7 @@ export default function LosslessVideoPage() {
                                 startEffectTimelineDrag(event, effect, "trim-start");
                               }}
                             />
-                            {effect.kind === "snow" ? <Snowflake size={13} /> : <Sparkles size={13} />}
+                            <VideoEffectIcon kind={effect.kind} size={13} />
                             <span>{effect.name}</span>
                             <small className="lossless-media-track-duration">{formatCompactDuration(effect.end - effect.start)}</small>
                             <i
@@ -8191,7 +8907,7 @@ export default function LosslessVideoPage() {
                               }}
                               aria-hidden="true"
                             >
-                              {effectDropPreview.kind === "snow" ? <Snowflake size={13} /> : <Sparkles size={13} />}
+                              <VideoEffectIcon kind={effectDropPreview.kind} size={13} />
                               <span>{videoEffectDefinitions.find((definition) => definition.kind === effectDropPreview.kind)?.name}</span>
                               <small>{effectDropPreview.valid ? formatCompactDuration(effectDropPreview.end - effectDropPreview.start) : "不可放置"}</small>
                             </div>
@@ -9076,22 +9792,66 @@ export default function LosslessVideoPage() {
                   </section>
 
                 </div>
-              ) : inspectorTab === "effects" ? (
+              ) : inspectorTab === "effects" || inspectorTab === "watermark" ? (
                 <div className="lossless-inspector-content lossless-effects-inspector">
+                  {inspectorTab === "watermark" ? (
+                    <>
+                      <button
+                        className="primary-button lossless-inspector-action"
+                        type="button"
+                        onClick={() => selectedEffect?.kind === "ai-watermark"
+                          ? void applySelectedWatermarkRemoval()
+                          : startWatermarkRemoval()}
+                        disabled={projectVideoDuration <= 0 || taskRunning}
+                      >
+                        {status === "inpainting" ? <Loader2 className="spin" size={17} /> : <Eraser size={17} />}
+                        {status === "inpainting"
+                          ? "正在重建"
+                          : selectedEffect?.kind === "ai-watermark"
+                            ? "生成高清修复"
+                            : "开始去水印"}
+                      </button>
+                      <div className={`lossless-audio-engine-status ${watermarkRemovalStatusLoading ? "is-loading" : watermarkRemovalStatus?.available ? "is-ready" : "is-unavailable"}`}>
+                        {watermarkRemovalStatusLoading
+                          ? <Loader2 className="spin" size={16} />
+                          : watermarkRemovalStatus?.available
+                            ? <CheckCircle2 size={16} />
+                            : <AlertTriangle size={16} />}
+                        <span>
+                          <strong>{watermarkRemovalStatus?.available ? watermarkRemovalStatus.engine || "时序重建" : "本地修复引擎"}</strong>
+                          <small>{watermarkRemovalStatus?.message || "框选区间后，将相邻帧真实背景回填到水印区域"}</small>
+                        </span>
+                        <button
+                          className="lossless-icon-button"
+                          type="button"
+                          title="重新检查去水印引擎"
+                          aria-label="重新检查去水印引擎"
+                          disabled={watermarkRemovalStatusLoading || taskRunning}
+                          onClick={() => void checkWatermarkRemovalStatus()}
+                        >
+                          <RotateCcw size={14} />
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
                   <section className="lossless-inspector-section">
                     <div className="lossless-section-title-row">
-                      <h3>基础特效</h3>
-                      <span>{effects.length}</span>
+                      <h3>{inspectorTab === "watermark" ? "去水印区域" : "基础特效"}</h3>
+                      <span>{inspectorTab === "watermark" ? watermarkEffects.length : visualEffects.length}</span>
                     </div>
                     <div className="lossless-effect-library">
-                      {videoEffectDefinitions.map((definition) => (
+                      {videoEffectDefinitions
+                        .filter((definition) => inspectorTab === "watermark"
+                          ? definition.kind === "ai-watermark"
+                          : definition.kind !== "ai-watermark")
+                        .map((definition) => (
                         <button
                           type="button"
                           key={definition.kind}
                           title={`拖到时间轴添加${definition.name}`}
                           aria-label={`拖到时间轴添加${definition.name}`}
-                          disabled={projectVideoDuration <= 0 || status === "exporting"}
-                          draggable={projectVideoDuration > 0 && status !== "exporting"}
+                          disabled={projectVideoDuration <= 0 || taskRunning}
+                          draggable={projectVideoDuration > 0 && !taskRunning}
                           onDragStart={(event) => {
                             draggedEffectKindRef.current = definition.kind;
                             event.dataTransfer.effectAllowed = "copy";
@@ -9104,23 +9864,23 @@ export default function LosslessVideoPage() {
                           }}
                         >
                           <span className={`is-${definition.kind}`}>
-                            {definition.kind === "snow" ? <Snowflake size={18} /> : <Sparkles size={18} />}
+                            <VideoEffectIcon kind={definition.kind} size={18} />
                           </span>
                           <strong>{definition.name}</strong>
-                          <small>{definition.scope === "global" ? "全局" : "局部"}</small>
+                          <small>{definition.kind === "ai-watermark" ? "时序重建" : definition.kind === "watermark" ? "快速贴片" : definition.scope === "global" ? "全局" : "局部"}</small>
                         </button>
                       ))}
                     </div>
                   </section>
 
-                  {effects.length ? (
+                  {(inspectorTab === "watermark" ? watermarkEffects : visualEffects).length ? (
                     <section className="lossless-inspector-section">
                       <div className="lossless-section-title-row">
-                        <h3>时间轴特效</h3>
-                        <span>{enabledEffects.length} 个启用</span>
+                        <h3>{inspectorTab === "watermark" ? "水印区域" : "时间轴特效"}</h3>
+                        <span>{(inspectorTab === "watermark" ? enabledWatermarkEffects : enabledVisualEffects).length} 个启用</span>
                       </div>
                       <div className="lossless-effect-list">
-                        {effects.map((effect) => (
+                        {(inspectorTab === "watermark" ? watermarkEffects : visualEffects).map((effect) => (
                           <button
                             className={selectedEffectId === effect.id ? "is-selected" : ""}
                             type="button"
@@ -9135,7 +9895,7 @@ export default function LosslessVideoPage() {
                               seekPreview(effect.start, false);
                             }}
                           >
-                            {effect.kind === "snow" ? <Snowflake size={14} /> : <Sparkles size={14} />}
+                            <VideoEffectIcon kind={effect.kind} size={14} />
                             <span><strong>{effect.name}</strong><small>{formatSeconds(effect.start)} - {formatSeconds(effect.end)}</small></span>
                             <em>{effect.enabled ? "开" : "关"}</em>
                           </button>
@@ -9144,7 +9904,7 @@ export default function LosslessVideoPage() {
                     </section>
                   ) : null}
 
-                  {selectedEffect ? (
+                  {selectedEffect && (inspectorTab === "watermark" ? selectedEffect.kind === "ai-watermark" : selectedEffect.kind !== "ai-watermark") ? (
                     <section className="lossless-inspector-section lossless-effect-properties">
                       <div className="lossless-section-title-row">
                         <h3>{selectedEffect.name}</h3>
@@ -9166,17 +9926,21 @@ export default function LosslessVideoPage() {
                           <span><input type="number" min={selectedEffect.start + minimumTimelineClipDuration} max={selectedEffectLaneBounds?.maximumEnd ?? projectVideoDuration} step={1 / timelineFps} value={Number(selectedEffect.end.toFixed(3))} onFocus={beginEffectPropertyEdit} onBlur={finishEffectPropertyEdit} onChange={(event) => updateEffect(selectedEffect.id, (effect) => ({ ...effect, end: Number(event.target.value) }))} /><em>s</em></span>
                         </label>
                       </div>
-                      <label className="lossless-slider-field">
-                        <span>强度</span>
-                        <EditorRange min={0} max={1} step={0.01} value={selectedEffect.intensity} onFocus={beginEffectPropertyEdit} onBlur={finishEffectPropertyEdit} onPointerDown={beginEffectPropertyEdit} onPointerUp={finishEffectPropertyEdit} onPointerCancel={finishEffectPropertyEdit} onChange={(event) => updateEffect(selectedEffect.id, (effect) => ({ ...effect, intensity: Number(event.target.value) }))} />
-                        <em>{Math.round(selectedEffect.intensity * 100)}%</em>
-                      </label>
-                      <label className="lossless-slider-field">
-                        <span>透明度</span>
-                        <EditorRange min={0} max={1} step={0.01} value={selectedEffect.opacity} onFocus={beginEffectPropertyEdit} onBlur={finishEffectPropertyEdit} onPointerDown={beginEffectPropertyEdit} onPointerUp={finishEffectPropertyEdit} onPointerCancel={finishEffectPropertyEdit} onChange={(event) => updateEffect(selectedEffect.id, (effect) => ({ ...effect, opacity: Number(event.target.value) }))} />
-                        <em>{Math.round(selectedEffect.opacity * 100)}%</em>
-                      </label>
-                      {effectIsLocal(selectedEffect) && selectedEffect.mask ? (
+                      {selectedEffect.kind !== "ai-watermark" ? (
+                        <>
+                          <label className="lossless-slider-field">
+                            <span>{selectedEffect.kind === "watermark" ? "区域扩展" : "强度"}</span>
+                            <EditorRange min={0} max={1} step={0.01} value={selectedEffect.intensity} onFocus={beginEffectPropertyEdit} onBlur={finishEffectPropertyEdit} onPointerDown={beginEffectPropertyEdit} onPointerUp={finishEffectPropertyEdit} onPointerCancel={finishEffectPropertyEdit} onChange={(event) => updateEffect(selectedEffect.id, (effect) => ({ ...effect, intensity: Number(event.target.value) }))} />
+                            <em>{Math.round(selectedEffect.intensity * 100)}%</em>
+                          </label>
+                          <label className="lossless-slider-field">
+                            <span>{selectedEffect.kind === "watermark" ? "融合" : "透明度"}</span>
+                            <EditorRange min={0} max={1} step={0.01} value={selectedEffect.opacity} onFocus={beginEffectPropertyEdit} onBlur={finishEffectPropertyEdit} onPointerDown={beginEffectPropertyEdit} onPointerUp={finishEffectPropertyEdit} onPointerCancel={finishEffectPropertyEdit} onChange={(event) => updateEffect(selectedEffect.id, (effect) => ({ ...effect, opacity: Number(event.target.value) }))} />
+                            <em>{Math.round(selectedEffect.opacity * 100)}%</em>
+                          </label>
+                        </>
+                      ) : null}
+                      {effectIsLocal(selectedEffect) && selectedEffectDisplayMask ? (
                         <div className="lossless-effect-mask-fields">
                           <strong>区域</strong>
                           {(["x", "y", "width", "height"] as const).map((key) => (
@@ -9187,16 +9951,72 @@ export default function LosslessVideoPage() {
                                 min={key === "width" || key === "height" ? 2 : 0}
                                 max={100}
                                 step={0.1}
-                                value={Number(selectedEffect.mask![key].toFixed(1))}
+                                value={Number(selectedEffectDisplayMask[key].toFixed(1))}
                                 onFocus={beginEffectPropertyEdit}
                                 onBlur={finishEffectPropertyEdit}
                                 onChange={(event) => updateEffect(selectedEffect.id, (effect) => ({
-                                  ...effect,
-                                  mask: normalizeEffectMask({ ...(effect.mask || selectedEffect.mask!), [key]: Number(event.target.value) })
+                                  ...withEffectMaskAtTime(
+                                    effect,
+                                    currentTimeRef.current,
+                                    normalizeEffectMask({ ...selectedEffectDisplayMask, [key]: Number(event.target.value) })
+                                  )
                                 }))}
                               />
                             </label>
                           ))}
+                          {selectedEffect.kind === "watermark" || selectedEffect.kind === "ai-watermark" ? (
+                            <div className="lossless-watermark-keyframes">
+                              <div>
+                                <strong>移动跟随</strong>
+                                <span>{selectedEffectMaskKeyframes.length} 个关键帧</span>
+                              </div>
+                              <div>
+                                <button
+                                  type="button"
+                                  title="上一个遮罩关键帧"
+                                  aria-label="上一个遮罩关键帧"
+                                  disabled={!selectedEffectMaskKeyframes.some((keyframe) => keyframe.time < currentTime - 0.5 / timelineFps)}
+                                  onClick={() => {
+                                    const previous = [...selectedEffectMaskKeyframes].reverse().find((keyframe) => keyframe.time < currentTime - 0.5 / timelineFps);
+                                    if (!previous) return;
+                                    setSelectedKeyframeId(previous.id);
+                                    seekPreview(previous.time, false);
+                                  }}
+                                >
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <button type="button" onClick={() => addWatermarkMaskKeyframe(selectedEffect.id)}>
+                                  <Diamond size={13} />
+                                  记录当前位置
+                                </button>
+                                <button
+                                  type="button"
+                                  title="下一个遮罩关键帧"
+                                  aria-label="下一个遮罩关键帧"
+                                  disabled={!selectedEffectMaskKeyframes.some((keyframe) => keyframe.time > currentTime + 0.5 / timelineFps)}
+                                  onClick={() => {
+                                    const next = selectedEffectMaskKeyframes.find((keyframe) => keyframe.time > currentTime + 0.5 / timelineFps);
+                                    if (!next) return;
+                                    setSelectedKeyframeId(next.id);
+                                    seekPreview(next.time, false);
+                                  }}
+                                >
+                                  <ChevronRight size={14} />
+                                </button>
+                                <button
+                                  className="text-danger"
+                                  type="button"
+                                  title="删除当前遮罩关键帧"
+                                  aria-label="删除当前遮罩关键帧"
+                                  disabled={!selectedEffectMaskKeyframe || selectedEffectMaskKeyframes.length <= 1}
+                                  onClick={() => selectedEffectMaskKeyframe && removeWatermarkMaskKeyframe(selectedEffect.id, selectedEffectMaskKeyframe.id)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                              <p>在播放头位置拖动或缩放区域会自动记录关键帧，区间内平滑跟随水印。</p>
+                            </div>
+                          ) : null}
                         </div>
                       ) : (
                         <>
@@ -9280,17 +10100,19 @@ export default function LosslessVideoPage() {
                   <div className="lossless-export-body">
                     <section className="lossless-inspector-section">
                       <h3>自动输出</h3>
-                      <div className={`lossless-export-boundary ${!videoOutputReencoded ? "is-lossless" : "is-reencode"}`}>
-                        {!videoOutputReencoded ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
+                      <div className={`lossless-export-boundary ${!videoOutputReencoded && !enabledWatermarkEffects.length ? "is-lossless" : "is-reencode"}`}>
+                        {!videoOutputReencoded && !enabledWatermarkEffects.length ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
                         <span>
-                          {videoCover
+                          {enabledWatermarkEffects.length
+                            ? `${enabledWatermarkEffects.length} 个去水印区域尚未生成，请先在“去水印”中生成高清修复。草稿不会作为滤镜混入导出。`
+                            : videoCover
                             ? "封面将成为导出视频的第一帧；视频轨会高质量编码，视频时长与声音时间轴保持不变。"
                             : enabledSubtitleTracks.length
                             ? `将 ${enabledSubtitleTracks.reduce((count, track) => count + track.cues.length, 0)} 条字幕烧录到画面，视频轨需要高质量重编码。`
                             : projectCanvasChanged
                             ? `作品比例已设为 ${formatProjectAspect(videoSize)}，需要按 ${Math.round(videoSize.width)} × ${Math.round(videoSize.height)} 项目画布高质量重编码。`
-                            : enabledEffects.length
-                            ? `${enabledEffects.length} 个时间轴特效需要逐帧合成，视频轨将使用硬件优先的高质量重编码。`
+                            : exportableEffects.length
+                            ? `${enabledVisualEffects.length} 个时间轴特效需要逐帧合成，视频轨将使用硬件优先的高质量重编码。`
                             : hasVideoColorAdjustments
                             ? "视频片段已应用调色，画面将使用硬件优先的高质量重编码；原始素材不会被修改。"
                             : hasImageTracks
@@ -9317,7 +10139,8 @@ export default function LosslessVideoPage() {
                       <dl><dt>画面尺寸</dt><dd>{`${Math.round(videoSize.width)} × ${Math.round(videoSize.height)}`}</dd></dl>
                       <dl><dt>导入资源</dt><dd>{videoClips.length + enabledTracks.length}</dd></dl>
                       <dl><dt>片段调色</dt><dd>{hasVideoColorAdjustments ? "已启用" : "未启用"}</dd></dl>
-                      <dl><dt>视频特效</dt><dd>{enabledEffects.length}</dd></dl>
+                      <dl><dt>水印抹除</dt><dd>{enabledWatermarkEffects.length}</dd></dl>
+                      <dl><dt>视频特效</dt><dd>{enabledVisualEffects.length}</dd></dl>
                       <dl><dt>字幕</dt><dd>{enabledSubtitleTracks.length ? `${enabledSubtitleTracks.reduce((count, track) => count + track.cues.length, 0)} 条 · 自动烧录` : "无"}</dd></dl>
                       <dl>
                         <dt>视频封面</dt>
@@ -9464,7 +10287,7 @@ export default function LosslessVideoPage() {
             </aside>
           </div>
         </div>
-        {mediaContextMenu && (contextMenuResource || contextMenuVideoClip || contextMenuTrack || contextMenuSubtitleCue) ? (
+        {mediaContextMenu && (contextMenuResource || contextMenuVideoClip || contextMenuTrack || contextMenuSubtitleCue || contextMenuEffect) ? (
           <div
             className="lossless-media-context-menu"
             role="menu"
@@ -9500,6 +10323,39 @@ export default function LosslessVideoPage() {
                   onClick={() => {
                     setMediaContextMenu(null);
                     removeImportedResource(contextMenuResource);
+                  }}
+                >
+                  <Trash2 size={14} />
+                  <span>删除</span>
+                </button>
+              </>
+            ) : contextMenuEffect ? (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="从播放头开始复制；若播放头位于同轨素材上，则紧贴该素材之后"
+                  aria-label="复制特效"
+                  disabled={taskRunning}
+                  onClick={() => {
+                    setMediaContextMenu(null);
+                    duplicateVideoEffect(contextMenuEffect.id);
+                  }}
+                >
+                  <Copy size={14} />
+                  <span>复制</span>
+                </button>
+                <i aria-hidden="true" />
+                <button
+                  className="is-danger"
+                  type="button"
+                  role="menuitem"
+                  title="删除特效"
+                  aria-label="删除特效"
+                  disabled={taskRunning}
+                  onClick={() => {
+                    setMediaContextMenu(null);
+                    removeVideoEffect(contextMenuEffect.id);
                   }}
                 >
                   <Trash2 size={14} />

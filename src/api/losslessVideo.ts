@@ -40,6 +40,33 @@ export type AudioSeparationApplyResponse = {
   message?: string;
 };
 
+export type WatermarkRemovalStatus = {
+  available: boolean;
+  engine?: string;
+  version?: string;
+  device?: string;
+  platform?: string;
+  modelReady: boolean;
+  message?: string;
+};
+
+export type WatermarkRemovalOptions = {
+  sourceStart: number;
+  sourceEnd: number;
+  outputName?: string;
+  quality: "high";
+  mask: VideoEffectMask;
+  maskKeyframes?: VideoEffectMaskKeyframe[];
+};
+
+export type WatermarkRemovalResponse = {
+  taskId: string;
+  duration: number;
+  engine?: string;
+  device?: string;
+  message?: string;
+};
+
 export type DetectParams = {
   maxSearchWindowSec: number;
   minRepeatSec: number;
@@ -108,13 +135,18 @@ export type VideoColorAdjustments = {
   saturation: number;
 };
 
-export type VideoEffectKind = "particles" | "snow" | "blur" | "mosaic";
+export type VideoEffectKind = "particles" | "snow" | "blur" | "mosaic" | "watermark" | "ai-watermark";
 
 export type VideoEffectMask = {
   x: number;
   y: number;
   width: number;
   height: number;
+};
+
+export type VideoEffectMaskKeyframe = VideoEffectMask & {
+  id: string;
+  time: number;
 };
 
 export type ExportVideoEffect = {
@@ -130,6 +162,8 @@ export type ExportVideoEffect = {
   density: number;
   seed: number;
   mask?: VideoEffectMask;
+  removalMode?: "repair";
+  maskKeyframes?: VideoEffectMaskKeyframe[];
 };
 
 export type SubtitleWord = {
@@ -494,8 +528,36 @@ export async function applyAudioSeparationToAsset(
   return unwrap(resp);
 }
 
+export async function getWatermarkRemovalStatus() {
+  const resp = await getReq<WatermarkRemovalStatus>("/check/video/watermark-removal/status", undefined, { timeout: 60_000 });
+  return unwrap(resp);
+}
+
+export async function applyWatermarkRemovalToAsset(
+  taskId: string,
+  file: File,
+  options: WatermarkRemovalOptions,
+  signal?: AbortSignal,
+  onUploadProgress?: (fraction: number) => void
+) {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  formData.append("options", JSON.stringify(options));
+  const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+  const resp = await postReq<WatermarkRemovalResponse>(`/check/video/watermark-removal/apply${query}`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    signal,
+    timeout: 0,
+    onUploadProgress: (event) => {
+      const total = Number(event.total || 0);
+      if (total > 0) onUploadProgress?.(Math.min(1, Math.max(0, event.loaded / total)));
+    }
+  });
+  return unwrap(resp);
+}
+
 export function downloadVideoOutputBlob(taskId: string, signal?: AbortSignal) {
-  if (!taskId) throw new Error("声音处理任务不存在，请重新处理");
+  if (!taskId) throw new Error("处理任务不存在，请重新处理");
   return postBlobReq("/check/video/download", { taskId }, { signal, timeout: 0 });
 }
 

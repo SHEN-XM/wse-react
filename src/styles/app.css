@@ -5248,9 +5248,18 @@ input {
   filter: drop-shadow(0 0 1.5px rgba(255, 176, 69, 0.72));
 }
 
+.lossless-watermark-repair-preview {
+  position: absolute;
+  z-index: 70;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .lossless-local-effect-preview {
   position: absolute;
-  z-index: 39;
+  z-index: 75;
   box-sizing: border-box;
   border: 1px solid transparent;
   transform: translate3d(-50%, -50%, 0);
@@ -5267,6 +5276,28 @@ input {
   background-size: 8px 8px;
 }
 
+.lossless-local-effect-preview.is-watermark {
+  background: color-mix(in srgb, var(--card-bg) 6%, transparent);
+}
+
+.lossless-local-effect-preview.is-ai-watermark,
+.lossless-local-effect-preview.is-ai-watermark.is-selected {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.lossless-watermark-preview-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-color);
+  font-size: 11px;
+  line-height: 1;
+  text-shadow: 0 1px 2px var(--card-bg);
+  pointer-events: none;
+}
+
 .lossless-local-effect-preview.is-selected {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 72%, transparent);
@@ -5274,8 +5305,6 @@ input {
 
 .lossless-local-effect-resize {
   position: absolute;
-  right: -7px;
-  bottom: -7px;
   width: 13px;
   min-width: 13px;
   height: 13px;
@@ -5286,6 +5315,28 @@ input {
   background: var(--card-bg);
   cursor: nwse-resize;
   touch-action: none;
+}
+
+.lossless-local-effect-resize.is-nw {
+  top: -7px;
+  left: -7px;
+}
+
+.lossless-local-effect-resize.is-ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+
+.lossless-local-effect-resize.is-se {
+  right: -7px;
+  bottom: -7px;
+}
+
+.lossless-local-effect-resize.is-sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
 }
 
 .lossless-video-transform-overlay {
@@ -6303,6 +6354,14 @@ input {
   background: color-mix(in srgb, var(--text-color-secend) 20%, var(--card-bg));
 }
 
+.lossless-media-track-row.is-effect .lossless-media-track-clip.is-watermark {
+  background: color-mix(in srgb, var(--color-green) 22%, var(--card-bg));
+}
+
+.lossless-media-track-row.is-effect .lossless-media-track-clip.is-ai-watermark {
+  background: color-mix(in srgb, var(--color-warning) 22%, var(--card-bg));
+}
+
 .lossless-effect-drop-preview {
   position: absolute;
   z-index: 6;
@@ -7180,6 +7239,16 @@ input {
   background: color-mix(in srgb, var(--color-green) 14%, var(--bg-color-light));
 }
 
+.lossless-effect-library > button > span.is-watermark {
+  color: var(--color-green);
+  background: color-mix(in srgb, var(--color-green) 14%, var(--bg-color-light));
+}
+
+.lossless-effect-library > button > span.is-ai-watermark {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, var(--bg-color-light));
+}
+
 .lossless-effect-library strong,
 .lossless-effect-library small {
   min-width: 0;
@@ -7317,6 +7386,54 @@ input {
   padding: 0 4px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.lossless-watermark-keyframes {
+  grid-column: 1 / -1;
+  margin-top: 7px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-color);
+}
+
+.lossless-watermark-keyframes > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lossless-watermark-keyframes > div:first-child strong,
+.lossless-watermark-keyframes > div:first-child span {
+  font-size: 12px;
+}
+
+.lossless-watermark-keyframes > div:first-child span {
+  color: var(--text-color-secend);
+}
+
+.lossless-watermark-keyframes > div:nth-child(2) {
+  margin-top: 7px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px 32px;
+  gap: 5px;
+}
+
+.lossless-watermark-keyframes > div:nth-child(2) button {
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.lossless-watermark-keyframes p {
+  margin: 7px 0 0;
+  color: var(--text-color-secend);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .lossless-keyframe-toolbar {
