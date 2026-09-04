@@ -76,6 +76,8 @@ export type DetectParams = {
   confirmPaddingMs: number;
   preferAudioFirst: boolean;
   autoDetectSlideTransitions: boolean;
+  sourceStart?: number;
+  sourceEnd?: number;
 };
 
 export type CropRect = {

@@ -5726,7 +5726,7 @@ input {
 .lossless-task-strip .lossless-status {
   min-height: 34px;
   display: grid;
-  grid-template-columns: 20px auto minmax(0, 1fr) auto auto;
+  grid-template-columns: 20px auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
@@ -5769,6 +5769,332 @@ input {
   background: color-mix(in srgb, var(--color-danger) 7%, var(--card-bg));
   padding: 6px 10px;
   font-size: 15px;
+}
+
+.lossless-task-log-trigger {
+  width: 88px;
+  height: 26px;
+  min-height: 26px;
+  margin-left: 2px;
+  padding: 0 8px;
+  border-color: var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-color-secend);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.lossless-task-log-trigger:hover:not(:disabled),
+.lossless-task-log-trigger:focus-visible,
+.lossless-task-log-trigger.is-active {
+  border-color: color-mix(in srgb, var(--text-color) 42%, var(--border-color));
+  background: var(--menu-active);
+  color: var(--text-color);
+}
+
+.lossless-operation-log-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, #000000 24%, transparent);
+}
+
+.lossless-operation-log-panel {
+  width: min(560px, calc(100vw - 20px));
+  height: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-left: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-color);
+  box-shadow: -10px 0 28px color-mix(in srgb, #000000 18%, transparent);
+}
+
+.lossless-operation-log-header {
+  min-height: 58px;
+  padding: 9px 12px 9px 16px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lossless-operation-log-header > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lossless-operation-log-header > div:first-child > strong {
+  font-size: 16px;
+}
+
+.lossless-operation-log-header > div:first-child > span {
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-operation-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lossless-operation-log-actions button {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lossless-operation-log-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  scrollbar-width: thin;
+}
+
+.lossless-operation-log-empty {
+  min-height: 240px;
+  color: var(--text-color-secend);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.lossless-operation-log-empty strong {
+  color: var(--text-color);
+}
+
+.lossless-operation-log-empty span {
+  max-width: 360px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.lossless-operation-log-block {
+  margin-bottom: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-color-light);
+  overflow: hidden;
+}
+
+.lossless-operation-log-block:last-child {
+  margin-bottom: 0;
+}
+
+.lossless-operation-log-block > header {
+  min-height: 42px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lossless-operation-log-heading,
+.lossless-operation-log-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.lossless-operation-log-heading > span {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  color: var(--text-color-secend);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-operation-log-heading > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.lossless-operation-log-heading > em {
+  flex: 0 0 auto;
+  color: var(--text-color-secend);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.lossless-operation-log-block.is-running .lossless-operation-log-heading > em {
+  color: var(--color-primary);
+}
+
+.lossless-operation-log-block.is-completed .lossless-operation-log-heading > em {
+  color: var(--color-green);
+}
+
+.lossless-operation-log-block.is-failed .lossless-operation-log-heading > em {
+  color: var(--color-danger);
+}
+
+.lossless-operation-log-block.is-cancelled .lossless-operation-log-heading > em {
+  color: var(--color-warning);
+}
+
+.lossless-operation-log-summary {
+  flex: 0 0 auto;
+  color: var(--text-color-secend);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-operation-log-summary > strong {
+  min-width: 54px;
+  color: var(--text-color);
+  text-align: right;
+}
+
+.lossless-operation-log-block > p {
+  margin: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-color-secend);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lossless-operation-log-block ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lossless-operation-log-block li {
+  min-height: 45px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 42px 58px;
+  align-items: center;
+  gap: 7px;
+}
+
+.lossless-operation-log-block li:last-child {
+  border-bottom: 0;
+}
+
+.lossless-operation-step-index {
+  color: var(--text-color-secend);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-operation-log-block li > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lossless-operation-log-block li > div > strong,
+.lossless-operation-log-block li > div > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lossless-operation-log-block li > div > strong {
+  font-size: 13px;
+}
+
+.lossless-operation-log-block li > div > span {
+  color: var(--text-color-secend);
+  font-size: 12px;
+}
+
+.lossless-operation-log-block li > em,
+.lossless-operation-log-block li > time {
+  color: var(--text-color-secend);
+  font-size: 12px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lossless-operation-log-block li.is-running > time {
+  color: var(--color-primary);
+}
+
+.lossless-operation-log-block li.is-failed > div > strong,
+.lossless-operation-log-block li.is-failed > time {
+  color: var(--color-danger);
+}
+
+@media (max-width: 720px) {
+  .lossless-task-strip .lossless-status {
+    grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  }
+
+  .lossless-task-strip .lossless-status > strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lossless-task-strip .lossless-status > span,
+  .lossless-task-strip .lossless-status > .lossless-task-elapsed {
+    display: none;
+  }
+
+  .lossless-task-log-trigger {
+    width: 30px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    gap: 0;
+  }
+
+  .lossless-operation-log-panel {
+    width: calc(100vw - 12px);
+  }
+
+  .lossless-operation-log-block > header {
+    align-items: flex-start;
+  }
+
+  .lossless-operation-log-summary {
+    display: grid;
+    justify-items: end;
+    gap: 2px;
+  }
+
+  .lossless-operation-log-block li {
+    grid-template-columns: 24px minmax(0, 1fr) 52px;
+  }
+
+  .lossless-operation-log-block li > em {
+    display: none;
+  }
 }
 
 .lossless-timeline {

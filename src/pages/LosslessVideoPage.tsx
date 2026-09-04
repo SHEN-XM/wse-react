@@ -44,6 +44,8 @@ import {
   Volume2,
   VolumeX,
   ZoomIn,
+  ScrollText,
+  X,
   XCircle
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type InputHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
@@ -111,6 +113,30 @@ type ProgressState = {
   percent: number;
   label: string;
   detail: string;
+};
+
+type RunningTaskStatus = Extract<TaskStatus, "detecting" | "transcribing" | "separating" | "inpainting" | "exporting">;
+type OperationLogStatus = "running" | "completed" | "failed" | "cancelled";
+
+type OperationLogStep = {
+  id: string;
+  label: string;
+  detail: string;
+  percent: number;
+  status: OperationLogStatus;
+  startedAt: number;
+  finishedAt?: number;
+};
+
+type OperationLog = {
+  id: string;
+  kind: RunningTaskStatus;
+  label: string;
+  detail: string;
+  status: OperationLogStatus;
+  startedAt: number;
+  finishedAt?: number;
+  steps: OperationLogStep[];
 };
 
 type InspectorTab = "detect" | "tracks" | "subtitles" | "watermark" | "effects" | "cover" | "export" | "settings";
@@ -831,6 +857,15 @@ function formatSeconds(value: number) {
 function formatCompactDuration(value: number) {
   if (!Number.isFinite(value)) return "--";
   return `${Number(Math.max(0, value).toFixed(2))}s`;
+}
+
+function formatMediaDuration(value: number) {
+  if (!Number.isFinite(value)) return "--:--:--";
+  const totalSeconds = Math.max(0, Math.floor(value));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function formatTimelineTimecode(value: number, fps: number) {
@@ -1765,33 +1800,6 @@ function videoGainLinePosition(gain: number) {
   return 8 + ratio * 84;
 }
 
-function mapPrimarySourceRangeToProject(
-  clips: VideoEditorClip[],
-  sources: VideoEditorSource[],
-  sourceStart: number,
-  sourceEnd: number
-) {
-  const primarySourceIds = new Set(sources.filter((source) => source.primary).map((source) => source.id));
-  const primaryClips = clips
-    .filter((clip) => primarySourceIds.has(clip.sourceId))
-    .sort((left, right) => left.sourceStart - right.sourceStart);
-  let sourceCursor = sourceStart;
-  let projectStart: number | undefined;
-  let projectEnd: number | undefined;
-  while (sourceCursor < sourceEnd - 0.0005) {
-    const clip = primaryClips.find((item) => sourceCursor >= item.sourceStart - 0.0005 && sourceCursor < item.sourceEnd - 0.0005);
-    if (!clip) return undefined;
-    const partProjectStart = clip.start + sourceCursor - clip.sourceStart;
-    if (projectStart === undefined) projectStart = partProjectStart;
-    if (projectEnd !== undefined && Math.abs(partProjectStart - projectEnd) > 0.03) return undefined;
-    const partSourceEnd = Math.min(sourceEnd, clip.sourceEnd);
-    projectEnd = clip.start + partSourceEnd - clip.sourceStart;
-    sourceCursor = partSourceEnd;
-  }
-  if (projectStart === undefined || projectEnd === undefined || projectEnd-projectStart <= 0.001) return undefined;
-  return { start: projectStart, end: projectEnd };
-}
-
 function interpolateImageKeyframe(track: ImageEditorTrack, time: number): MediaKeyframe {
   const keyframes = [...track.keyframes].sort((left, right) => left.time - right.time);
   const fallbackWidth = 18;
@@ -1910,6 +1918,58 @@ function formatElapsed(ms: number) {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatOperationDuration(ms: number) {
+  const safeMs = Math.max(0, ms);
+  if (safeMs < 1000) return `${Math.max(1, Math.round(safeMs))} ms`;
+  if (safeMs < 60_000) return `${(safeMs / 1000).toFixed(safeMs < 10_000 ? 1 : 0)} s`;
+  return formatElapsed(safeMs);
+}
+
+function formatOperationTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+}
+
+function isRunningTaskStatus(status: TaskStatus): status is RunningTaskStatus {
+  return status === "detecting"
+    || status === "transcribing"
+    || status === "separating"
+    || status === "inpainting"
+    || status === "exporting";
+}
+
+function operationLabel(status: RunningTaskStatus) {
+  switch (status) {
+    case "detecting":
+      return "重复与转场检测";
+    case "transcribing":
+      return "字幕识别";
+    case "separating":
+      return "声音处理";
+    case "inpainting":
+      return "时序去水印";
+    case "exporting":
+      return "导出 MP4";
+  }
+}
+
+function operationStatusLabel(status: OperationLogStatus) {
+  switch (status) {
+    case "running":
+      return "处理中";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+  }
 }
 
 function createInputFromFile(file: File): VideoInput {
@@ -2225,6 +2285,10 @@ export default function LosslessVideoPage() {
   const audioSeparationStatusRequestRef = useRef(0);
   const watermarkRemovalStatusRequestRef = useRef(0);
   const projectSourceInitializedRef = useRef(false);
+  const activeOperationLogIdRef = useRef("");
+  const activeOperationLogKindRef = useRef<RunningTaskStatus | undefined>(undefined);
+  const operationLogSequenceRef = useRef(0);
+  const operationLogStepSequenceRef = useRef(0);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoInput, setVideoInput] = useState<VideoInput | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -2282,6 +2346,8 @@ export default function LosslessVideoPage() {
   const [stepStartedAt, setStepStartedAt] = useState(0);
   const [stepFinishedAt, setStepFinishedAt] = useState(0);
   const [clockNow, setClockNow] = useState(Date.now());
+  const [operationLogs, setOperationLogs] = useState<OperationLog[]>([]);
+  const [operationLogOpen, setOperationLogOpen] = useState(false);
 
   const paintCanvasSnapGuides = (verticalGuide?: number, horizontalGuide?: number) => {
     const vertical = canvasVerticalGuideRef.current;
@@ -2561,7 +2627,7 @@ export default function LosslessVideoPage() {
   }, [audioSeparation, params, subtitlePreferences]);
 
   useEffect(() => {
-    const isRunning = status === "detecting" || status === "transcribing" || status === "separating" || status === "inpainting" || status === "exporting";
+    const isRunning = isRunningTaskStatus(status);
     if (isRunning) {
       const now = Date.now();
       setStepStartedAt(now);
@@ -2575,10 +2641,127 @@ export default function LosslessVideoPage() {
   }, [progress.label, status]);
 
   useEffect(() => {
-    if (status !== "detecting" && status !== "transcribing" && status !== "separating" && status !== "inpainting" && status !== "exporting") return;
+    if (!isRunningTaskStatus(status)) return;
     const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [status]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const activeId = activeOperationLogIdRef.current;
+
+    if (isRunningTaskStatus(status)) {
+      const stepLabel = progress.label.trim() || operationLabel(status);
+      const stepDetail = progress.detail.trim();
+      const stepPercent = clampPercent(progress.percent);
+
+      if (!activeId || activeOperationLogKindRef.current !== status) {
+        const operationId = `operation-${now}-${++operationLogSequenceRef.current}`;
+        const stepId = `operation-step-${now}-${++operationLogStepSequenceRef.current}`;
+        activeOperationLogIdRef.current = operationId;
+        activeOperationLogKindRef.current = status;
+        setOperationLogs((current) => [
+          ...current.map((operation) => operation.id === activeId && operation.status === "running"
+            ? {
+                ...operation,
+                status: "completed" as const,
+                finishedAt: now,
+                steps: operation.steps.map((step, index) => index === operation.steps.length - 1 && step.status === "running"
+                  ? { ...step, status: "completed" as const, finishedAt: now }
+                  : step)
+              }
+            : operation),
+          {
+            id: operationId,
+            kind: status,
+            label: operationLabel(status),
+            detail: stepDetail,
+            status: "running",
+            startedAt: now,
+            steps: [{
+              id: stepId,
+              label: stepLabel,
+              detail: stepDetail,
+              percent: stepPercent,
+              status: "running",
+              startedAt: now
+            }]
+          }
+        ]);
+        return;
+      }
+
+      setOperationLogs((current) => current.map((operation) => {
+        if (operation.id !== activeId) return operation;
+        const lastStep = operation.steps[operation.steps.length - 1];
+        if (lastStep?.label === stepLabel) {
+          return {
+            ...operation,
+            detail: stepDetail,
+            steps: operation.steps.map((step) => step.id === lastStep.id
+              ? { ...step, detail: stepDetail, percent: stepPercent }
+              : step)
+          };
+        }
+        const nextStep: OperationLogStep = {
+          id: `operation-step-${now}-${++operationLogStepSequenceRef.current}`,
+          label: stepLabel,
+          detail: stepDetail,
+          percent: stepPercent,
+          status: "running",
+          startedAt: now
+        };
+        return {
+          ...operation,
+          detail: stepDetail,
+          steps: [
+            ...operation.steps.map((step) => step.id === lastStep?.id && step.status === "running"
+              ? { ...step, status: "completed" as const, finishedAt: now }
+              : step),
+            nextStep
+          ]
+        };
+      }));
+      return;
+    }
+
+    if (!activeId) return;
+    const finalStatus: OperationLogStatus = status === "error"
+      ? "failed"
+      : status === "cancelled" || status === "idle"
+        ? "cancelled"
+        : "completed";
+    activeOperationLogIdRef.current = "";
+    activeOperationLogKindRef.current = undefined;
+    setOperationLogs((current) => current.map((operation) => {
+      if (operation.id !== activeId) return operation;
+      const lastStep = operation.steps[operation.steps.length - 1];
+      return {
+        ...operation,
+        detail: progress.detail.trim() || operation.detail,
+        status: finalStatus,
+        finishedAt: now,
+        steps: operation.steps.map((step) => step.id === lastStep?.id && step.status === "running"
+          ? {
+              ...step,
+              detail: progress.detail.trim() || step.detail,
+              percent: Math.max(step.percent, clampPercent(progress.percent)),
+              status: finalStatus,
+              finishedAt: now
+            }
+          : step)
+      };
+    }));
+  }, [progress.detail, progress.label, progress.percent, status]);
+
+  useEffect(() => {
+    if (!operationLogOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOperationLogOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [operationLogOpen]);
 
   const removableSegments = useMemo(() => segments.filter((segment) => segment.deleteSecond), [segments]);
   const removeDuration = useMemo(
@@ -3023,7 +3206,7 @@ export default function LosslessVideoPage() {
   }, [timelineMaxZoom]);
 
   const taskRunning = status === "detecting" || status === "transcribing" || status === "separating" || status === "inpainting" || status === "exporting";
-  const canRunTask = Boolean(videoInput) && videoClips.length > 0 && !taskRunning;
+  const canRunTask = Boolean(selectedVideoClip && selectedVideoSource) && !taskRunning;
   const automaticSubtitleMode: SubtitleExportMode = enabledSubtitleTracks.length ? "burn" : "none";
   const automaticExportMode: LosslessCutMode = hasImageTracks
     || hasVideoColorAdjustments
@@ -4045,13 +4228,11 @@ export default function LosslessVideoPage() {
     setInspectorTab("tracks");
   };
 
-  const applyPrimaryAudioPeaks = (requestedPeaks?: number[]) => {
+  const applyVideoSourceAudioPeaks = (sourceId: string, requestedPeaks?: number[]) => {
     const audioPeaks = normalizeAudioPeaks(requestedPeaks);
     if (audioPeaks.length < 2) return;
-    const primarySource = videoSourcesRef.current.find((source) => source.primary)
-      || videoSourcesRef.current.find((source) => source.file === videoFile);
-    if (!primarySource) return;
-    const nextSources = videoSourcesRef.current.map((source) => source.id === primarySource.id
+    if (!videoSourcesRef.current.some((source) => source.id === sourceId)) return;
+    const nextSources = videoSourcesRef.current.map((source) => source.id === sourceId
       ? { ...source, hasAudio: true, audioPeaks }
       : source);
     videoSourcesRef.current = nextSources;
@@ -7106,16 +7287,27 @@ export default function LosslessVideoPage() {
   };
 
   const runDetect = async () => {
-    if (!videoInput) return;
+    const detectionClip = selectedVideoClip;
+    const detectionSource = selectedVideoSource;
+    if (!detectionClip || !detectionSource) {
+      notify({ type: "warning", title: "请选择视频片段", message: "请先在时间轴中选中需要检测的视频片段" });
+      return;
+    }
+    const sourceStart = clampValue(detectionClip.sourceStart, 0, detectionSource.duration);
+    const sourceEnd = clampValue(detectionClip.sourceEnd, sourceStart, detectionSource.duration);
+    const selectedDuration = sourceEnd - sourceStart;
+    if (selectedDuration <= 0.05) {
+      notify({ type: "error", title: "片段时长无效", message: "所选视频片段没有可检测的内容" });
+      return;
+    }
     reusableSourceTaskIdRef.current = undefined;
     setStatus("detecting");
     setError("");
-    setProgress({ percent: 1, label: "上传视频", detail: "正在把视频交给本地处理器" });
+    setProgress({ percent: 1, label: "上传视频", detail: `仅检测所选片段 ${formatSeconds(selectedDuration)}` });
     const nextTaskId = createVideoTaskId();
     setTaskId(nextTaskId);
     abortRef.current = new AbortController();
     const taskWatcher = watchVideoTask(nextTaskId, (info) => {
-      if (info.duration) setDuration(info.duration);
       if (info.status === "failed") {
         const message = info.message || "检测失败";
         setError(message);
@@ -7134,7 +7326,12 @@ export default function LosslessVideoPage() {
     });
     try {
       const response = await detectDuplicateSegments(
-        { taskId: nextTaskId, file: videoFile ?? undefined, input: videoInput, params },
+        {
+          taskId: nextTaskId,
+          file: detectionSource.file,
+          input: createInputFromFile(detectionSource.file),
+          params: { ...params, sourceStart, sourceEnd }
+        },
         abortRef.current.signal,
         (fraction) => {
           const uploadPercent = 1 + Math.round(fraction * 6);
@@ -7149,32 +7346,36 @@ export default function LosslessVideoPage() {
           );
         }
       );
-      applyPrimaryAudioPeaks(response.audioPeaks);
+      const sourceTolerance = Math.max(0.001, 0.5 / timelineFps);
+      const detectsWholeSource = sourceStart <= sourceTolerance
+        && sourceEnd >= detectionSource.duration - sourceTolerance;
+      if (detectsWholeSource) {
+        applyVideoSourceAudioPeaks(detectionSource.id, response.audioPeaks);
+      }
       const normalizedSegments = response.segments.map(normalizeSegment);
-      const nextSegments = isVideoTimelineEdited(videoClipsRef.current, videoSourcesRef.current, response.duration || duration)
-        ? normalizedSegments.flatMap((segment): DuplicateSegment[] => {
-            const first = mapPrimarySourceRangeToProject(videoClipsRef.current, videoSourcesRef.current, segment.firstStart, segment.firstEnd);
-            const second = mapPrimarySourceRangeToProject(videoClipsRef.current, videoSourcesRef.current, segment.secondStart, segment.secondEnd);
-            const deletion = mapPrimarySourceRangeToProject(
-              videoClipsRef.current,
-              videoSourcesRef.current,
-              segment.deleteStart ?? segment.secondStart,
-              segment.deleteEnd ?? segment.secondEnd
-            );
-            if (!first || !second || !deletion) return [];
-            return [{
-              ...segment,
-              firstStart: first.start,
-              firstEnd: first.end,
-              secondStart: second.start,
-              secondEnd: second.end,
-              deleteStart: deletion.start,
-              deleteEnd: deletion.end,
-              duration: second.end - second.start,
-              deleteDuration: deletion.end - deletion.start
-            }];
-          })
-        : normalizedSegments;
+      const responseDuration = Math.max(0.001, response.duration || selectedDuration);
+      const timelineDuration = Math.max(0.001, detectionClip.end - detectionClip.start);
+      const toTimelineTime = (value: number) => detectionClip.start
+        + clampValue(value, 0, responseDuration) / responseDuration * timelineDuration;
+      const nextSegments = normalizedSegments.map((segment): DuplicateSegment => {
+        const firstStart = toTimelineTime(segment.firstStart);
+        const firstEnd = toTimelineTime(segment.firstEnd);
+        const secondStart = toTimelineTime(segment.secondStart);
+        const secondEnd = toTimelineTime(segment.secondEnd);
+        const deleteStart = toTimelineTime(segment.deleteStart ?? segment.secondStart);
+        const deleteEnd = toTimelineTime(segment.deleteEnd ?? segment.secondEnd);
+        return {
+          ...segment,
+          firstStart,
+          firstEnd,
+          secondStart,
+          secondEnd,
+          deleteStart,
+          deleteEnd,
+          duration: Math.max(0, secondEnd - secondStart),
+          deleteDuration: Math.max(0, deleteEnd - deleteStart)
+        };
+      });
       const nextRepeats = nextSegments.filter((segment) => segment.kind !== "slide-transition").length;
       const nextTransitions = nextSegments.filter((segment) => segment.kind === "slide-transition").length;
       setSegments(nextSegments);
@@ -7183,8 +7384,7 @@ export default function LosslessVideoPage() {
       setHistoryVersion((value) => value + 1);
       const completedTaskId = response.taskId || nextTaskId;
       setTaskId(completedTaskId);
-      reusableSourceTaskIdRef.current = completedTaskId;
-      if (response.duration) setDuration(response.duration);
+      reusableSourceTaskIdRef.current = detectionSource.primary && detectsWholeSource ? completedTaskId : undefined;
       setSegmentFilter(nextRepeats > 0 ? "repeat" : nextTransitions > 0 ? "transition" : "settings");
       setStatus("detected");
       setProgress({
@@ -8585,18 +8785,107 @@ export default function LosslessVideoPage() {
               </section>
 
               <section className="lossless-task-strip">
-                <div className={`lossless-status status-${status}`}>
+                <div className={`lossless-status status-${status}`} role="status" aria-live="polite">
                   {statusIcon}
                   <strong>{progress.label}</strong>
                   <span>{progress.detail}</span>
-                  <em>{Math.round(clampPercent(progress.percent))}%</em>
-                  {showStepElapsed ? <em>{stepElapsed}</em> : null}
+                  <em className="lossless-task-percent">{Math.round(clampPercent(progress.percent))}%</em>
+                  {showStepElapsed ? <em className="lossless-task-elapsed">{stepElapsed}</em> : null}
+                  <button
+                    className={`lossless-task-log-trigger ${operationLogOpen ? "is-active" : ""}`}
+                    type="button"
+                    title="查看本次页面中的处理日志"
+                    aria-label="查看处理日志"
+                    aria-expanded={operationLogOpen}
+                    onClick={() => setOperationLogOpen(true)}
+                  >
+                    <ScrollText size={14} />
+                    查看日志
+                  </button>
                 </div>
                 <div className="lossless-progress-bar">
                   <i style={{ width: `${clampPercent(progress.percent)}%` }} />
                 </div>
                 {error ? <div className="lossless-error">{error}</div> : null}
               </section>
+
+              {operationLogOpen ? (
+                <div
+                  className="lossless-operation-log-overlay"
+                  role="presentation"
+                  onPointerDown={() => setOperationLogOpen(false)}
+                >
+                  <aside
+                    className="lossless-operation-log-panel"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="lossless-operation-log-title"
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <header className="lossless-operation-log-header">
+                      <div>
+                        <strong id="lossless-operation-log-title">处理日志</strong>
+                        <span>临时记录，刷新页面后清空</span>
+                      </div>
+                      <div className="lossless-operation-log-actions">
+                        <button
+                          type="button"
+                          title="清空日志"
+                          aria-label="清空日志"
+                          disabled={!operationLogs.length || taskRunning}
+                          onClick={() => setOperationLogs([])}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                        <button type="button" title="关闭日志" aria-label="关闭日志" onClick={() => setOperationLogOpen(false)}>
+                          <X size={17} />
+                        </button>
+                      </div>
+                    </header>
+
+                    <div className="lossless-operation-log-content">
+                      {!operationLogs.length ? (
+                        <div className="lossless-operation-log-empty">
+                          <ScrollText size={28} />
+                          <strong>暂无处理日志</strong>
+                          <span>开始检测、识别、声音处理、去水印或导出后，这里会记录每一步耗时。</span>
+                        </div>
+                      ) : [...operationLogs].reverse().map((operation, operationIndex) => (
+                        <section
+                          className={`lossless-operation-log-block is-${operation.status}`}
+                          key={operation.id}
+                        >
+                          <header>
+                            <div className="lossless-operation-log-heading">
+                              <span>{operationLogs.length - operationIndex}</span>
+                              <strong>{operation.label}</strong>
+                              <em>{operationStatusLabel(operation.status)}</em>
+                            </div>
+                            <div className="lossless-operation-log-summary">
+                              <time dateTime={new Date(operation.startedAt).toISOString()}>{formatOperationTime(operation.startedAt)}</time>
+                              <strong>{formatOperationDuration((operation.finishedAt || clockNow) - operation.startedAt)}</strong>
+                            </div>
+                          </header>
+                          {operation.detail ? <p>{operation.detail}</p> : null}
+                          <ol>
+                            {operation.steps.map((step, stepIndex) => (
+                              <li className={`is-${step.status}`} key={step.id}>
+                                <span className="lossless-operation-step-index">{String(stepIndex + 1).padStart(2, "0")}</span>
+                                <div>
+                                  <strong>{step.label}</strong>
+                                  {step.detail ? <span>{step.detail}</span> : null}
+                                </div>
+                                <em>{Math.round(clampPercent(step.percent))}%</em>
+                                <time>{formatOperationDuration((step.finishedAt || clockNow) - step.startedAt)}</time>
+                              </li>
+                            ))}
+                          </ol>
+                        </section>
+                      ))}
+                    </div>
+                  </aside>
+                </div>
+              ) : null}
 
               <section className="lossless-timeline">
                 <header className="lossless-timeline-toolbar">
@@ -9183,7 +9472,13 @@ export default function LosslessVideoPage() {
             <aside className="lossless-inspector">
               {inspectorTab === "detect" ? (
                 <div className="lossless-inspector-content lossless-detect-inspector">
-                  <button className="primary-button lossless-inspector-action" type="button" onClick={runDetect} disabled={!canRunTask}>
+                  <button
+                    className="primary-button lossless-inspector-action"
+                    type="button"
+                    onClick={runDetect}
+                    disabled={!canRunTask}
+                    title={selectedVideoClip ? `检测所选片段：${formatSeconds(selectedVideoClip.end - selectedVideoClip.start)}` : "请先在时间轴中选中视频片段"}
+                  >
                     {status === "detecting" ? <Loader2 className="spin" size={17} /> : <Target size={17} />}
                     开始检测
                   </button>
@@ -9359,7 +9654,7 @@ export default function LosslessVideoPage() {
                               : usedMediaSourceIds.has(resource.id);
                             const metadata = resource.type === "image"
                               ? `${resource.width} × ${resource.height}`
-                              : formatCompactDuration(resource.duration);
+                              : formatMediaDuration(resource.duration);
                             return (
                               <div
                                 className={`lossless-resource-card is-${resource.type} ${inUse ? "is-used" : ""} ${selectedResourceId === resource.id ? "is-selected" : ""}`}
@@ -9400,7 +9695,7 @@ export default function LosslessVideoPage() {
                                         : <FileVideo size={24} />
                                       : <span className="lossless-resource-audio-preview"><Music2 size={24} /></span>}
                                   {inUse ? <span className="lossless-resource-used-badge">已添加</span> : null}
-                                  {resource.type !== "image" ? <time>{metadata}</time> : null}
+                                  {resource.type !== "image" ? <time title={formatSeconds(resource.duration)}>{metadata}</time> : null}
                                 </div>
                                 <strong>{resource.name}</strong>
                                 <small>{resource.type === "video" ? "视频" : resource.type === "audio" ? "音频" : metadata}</small>
