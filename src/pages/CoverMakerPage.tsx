@@ -10,7 +10,6 @@ import {
   Move,
   Plus,
   RotateCcw,
-  ShieldCheck,
   SlidersHorizontal,
   Tag,
   Trash2

@@ -4998,7 +4998,7 @@ input {
   min-height: 50px;
   padding: 7px 0 7px 10px;
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) auto 380px;
+  grid-template-columns: minmax(220px, 1fr) auto 380px;
   align-items: center;
   gap: 12px;
   background: var(--card-bg);
@@ -5027,14 +5027,14 @@ input {
 }
 
 .lossless-header-menu button {
-  min-width: 76px;
+  min-width: 68px;
   height: 34px;
   min-height: 34px;
   border: 1px solid var(--border-color);
   border-radius: var(--border-radius);
   background: var(--card-bg);
   color: var(--text-color);
-  padding: 0 12px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5165,6 +5165,18 @@ input {
   touch-action: none;
   will-change: left, top, width, height, transform;
   backface-visibility: hidden;
+}
+
+.lossless-video-cover-poster {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000000;
+  pointer-events: none;
 }
 
 .lossless-preview-canvas {
@@ -6549,6 +6561,88 @@ input {
   overscroll-behavior: contain;
 }
 
+.lossless-cover-inspector {
+  overscroll-behavior: contain;
+}
+
+.lossless-cover-preview {
+  width: 100%;
+  max-height: 228px;
+  margin-top: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  background: #000000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.lossless-cover-preview img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.lossless-cover-preview > div {
+  color: #b8b8b8;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.lossless-cover-details {
+  margin: 10px 0 0;
+}
+
+.lossless-cover-details > div {
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.lossless-cover-details dt {
+  color: var(--text-color-secend);
+}
+
+.lossless-cover-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lossless-cover-actions {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.lossless-cover-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.lossless-cover-note {
+  margin: 9px 0 0;
+  color: var(--text-color-secend);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .lossless-detect-tabs {
   padding: 0 12px 10px;
 }
@@ -7771,7 +7865,7 @@ input {
 
 @media (max-width: 1500px) {
   .lossless-video-toolbar {
-    grid-template-columns: minmax(300px, 1fr) auto 350px;
+    grid-template-columns: minmax(200px, 1fr) auto 350px;
   }
 
   .lossless-editing-layout {

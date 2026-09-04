@@ -267,6 +267,11 @@ export type ExportVideoAsset = {
   file: File;
 };
 
+export type ExportVideoCover = {
+  mode: "frame" | "upload";
+  time?: number;
+};
+
 export type DetectRequest = {
   taskId?: string;
   file?: File;
@@ -299,6 +304,7 @@ export type ExportRequest = {
   effects?: ExportVideoEffect[];
   subtitleTracks?: ExportSubtitleTrack[];
   subtitleMode?: SubtitleExportMode;
+  cover?: ExportVideoCover;
   mode: LosslessCutMode;
   outputName?: string;
 };
@@ -527,15 +533,17 @@ export async function exportCleanVideo(
   assets: ExportTrackAsset[] = [],
   videoAssets: ExportVideoAsset[] = [],
   sourceFile?: File,
-  onUploadProgress?: (fraction: number) => void
+  onUploadProgress?: (fraction: number) => void,
+  coverFile?: File
 ) {
-  const payload: ExportRequest | FormData = assets.length || videoAssets.length || sourceFile
+  const payload: ExportRequest | FormData = assets.length || videoAssets.length || sourceFile || coverFile
     ? (() => {
         const formData = new FormData();
         formData.append("request", JSON.stringify(request));
         if (sourceFile) formData.append("source", sourceFile, sourceFile.name);
         assets.forEach((asset) => formData.append(`asset_${asset.trackId}`, asset.file, asset.file.name));
         videoAssets.forEach((asset) => formData.append(`video_asset_${asset.sourceId}`, asset.file, asset.file.name));
+        if (coverFile) formData.append("cover", coverFile, coverFile.name);
         return formData;
       })()
     : request;

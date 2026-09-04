@@ -9,6 +9,7 @@ import {
   Diamond,
   Download,
   Eye,
+  ImageIcon,
   FileVideo,
   FolderOpen,
   Layers3,
@@ -106,7 +107,7 @@ type ProgressState = {
   detail: string;
 };
 
-type InspectorTab = "detect" | "tracks" | "subtitles" | "effects" | "export" | "settings";
+type InspectorTab = "detect" | "tracks" | "subtitles" | "effects" | "cover" | "export" | "settings";
 type SegmentFilter = "settings" | "repeat" | "transition";
 type TimelineTool = "select" | "blade";
 type ProjectAspectPreset = "source" | "16:9" | "4:3" | "2.35:1" | "2:1" | "1.85:1" | "9:16" | "3:4" | "1:1";
@@ -221,6 +222,16 @@ type ImportedImageResource = {
 type ImportedMediaResource = ImportedAudioResource | ImportedImageResource;
 type ImportedResource = VideoEditorSource | ImportedMediaResource;
 
+type ProjectVideoCover = {
+  mode: "frame" | "upload";
+  time: number;
+  previewUrl: string;
+  name: string;
+  width: number;
+  height: number;
+  file?: File;
+};
+
 type VideoTransform = {
   x: number;
   y: number;
@@ -321,6 +332,7 @@ type EditorHistorySnapshot = {
   videoSize: PreviewSize;
   projectSourceSize?: PreviewSize;
   projectAspectPreset?: ProjectAspectPreset;
+  videoCover?: ProjectVideoCover;
 };
 
 type EditHistoryEntry =
@@ -392,6 +404,10 @@ function cloneEditorEffect(effect: EditorEffect): EditorEffect {
   return { ...effect, mask: effect.mask ? { ...effect.mask } : undefined };
 }
 
+function cloneProjectVideoCover(cover?: ProjectVideoCover) {
+  return cover ? { ...cover } : undefined;
+}
+
 function cloneEditorSnapshot(snapshot: EditorHistorySnapshot): EditorHistorySnapshot {
   return {
     ...snapshot,
@@ -403,7 +419,8 @@ function cloneEditorSnapshot(snapshot: EditorHistorySnapshot): EditorHistorySnap
     subtitleTracks: (snapshot.subtitleTracks || []).map(cloneSubtitleTrack),
     timelineLaneOrder: [...snapshot.timelineLaneOrder],
     videoSize: { ...snapshot.videoSize },
-    projectSourceSize: { ...(snapshot.projectSourceSize || snapshot.videoSize) }
+    projectSourceSize: { ...(snapshot.projectSourceSize || snapshot.videoSize) },
+    videoCover: cloneProjectVideoCover(snapshot.videoCover)
   };
 }
 
@@ -418,7 +435,19 @@ function editorSnapshotFingerprint(snapshot: EditorHistorySnapshot) {
     timelineLaneOrder: snapshot.timelineLaneOrder,
     videoSize: snapshot.videoSize,
     projectSourceSize: snapshot.projectSourceSize,
-    projectAspectPreset: snapshot.projectAspectPreset
+    projectAspectPreset: snapshot.projectAspectPreset,
+    videoCover: snapshot.videoCover
+      ? {
+          mode: snapshot.videoCover.mode,
+          time: snapshot.videoCover.time,
+          name: snapshot.videoCover.name,
+          width: snapshot.videoCover.width,
+          height: snapshot.videoCover.height,
+          file: snapshot.videoCover.file
+            ? `${snapshot.videoCover.file.name}:${snapshot.videoCover.file.size}:${snapshot.videoCover.file.lastModified}`
+            : ""
+        }
+      : undefined
   });
 }
 
@@ -1930,6 +1959,31 @@ function createVideoThumbnail(url: string, duration: number) {
   });
 }
 
+async function captureVideoFrameCover(video: HTMLVideoElement, maxEdge = 3840) {
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) return undefined;
+  const scale = Math.min(1, maxEdge / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  try {
+    const context = canvas.getContext("2d");
+    if (!context) return undefined;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.94));
+    if (!blob) return undefined;
+    return {
+      file: new File([blob], `video-cover-${Date.now()}.jpg`, { type: "image/jpeg" }),
+      previewUrl: URL.createObjectURL(blob),
+      width: canvas.width,
+      height: canvas.height
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function readImageSize(url: string) {
   return new Promise<PreviewSize>((resolve) => {
     const image = new Image();
@@ -1963,6 +2017,7 @@ export default function LosslessVideoPage() {
   const storedSettingsRef = useRef(loadStoredSettings());
   const resourceInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleInputRef = useRef<HTMLInputElement | null>(null);
+  const videoCoverInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoAudioGraphRef = useRef<VideoAudioGraph | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -1981,6 +2036,7 @@ export default function LosslessVideoPage() {
   const subtitleTracksRef = useRef<EditorSubtitleTrack[]>([]);
   const videoSourcesRef = useRef<VideoEditorSource[]>([]);
   const videoClipsRef = useRef<VideoEditorClip[]>([]);
+  const videoCoverRef = useRef<ProjectVideoCover | undefined>(undefined);
   const timelineLaneOrderRef = useRef<string[]>([]);
   const mediaResourcesRef = useRef<ImportedMediaResource[]>([]);
   const activeVideoClipIdRef = useRef("");
@@ -2027,6 +2083,7 @@ export default function LosslessVideoPage() {
   const [tracks, setTracks] = useState<EditorTrack[]>([]);
   const [effects, setEffects] = useState<EditorEffect[]>([]);
   const [subtitleTracks, setSubtitleTracks] = useState<EditorSubtitleTrack[]>([]);
+  const [videoCover, setVideoCover] = useState<ProjectVideoCover>();
   const [selectedTrackId, setSelectedTrackId] = useState("");
   const [selectedEffectId, setSelectedEffectId] = useState("");
   const [selectedSubtitleTrackId, setSelectedSubtitleTrackId] = useState("");
@@ -2149,6 +2206,10 @@ export default function LosslessVideoPage() {
   }, [videoClips]);
 
   useEffect(() => {
+    videoCoverRef.current = videoCover;
+  }, [videoCover]);
+
+  useEffect(() => {
     timelineLaneOrderRef.current = timelineLaneOrder;
   }, [timelineLaneOrder]);
 
@@ -2240,10 +2301,12 @@ export default function LosslessVideoPage() {
         snapshot.tracks.forEach((track) => previewUrls.add(track.previewUrl));
         snapshot.videoSources.forEach((source) => previewUrls.add(source.previewUrl));
         snapshot.mediaResources.forEach((resource) => previewUrls.add(resource.previewUrl));
+        if (snapshot.videoCover?.previewUrl.startsWith("blob:")) previewUrls.add(snapshot.videoCover.previewUrl);
       };
       tracksRef.current.forEach((track) => previewUrls.add(track.previewUrl));
       videoSourcesRef.current.forEach((source) => previewUrls.add(source.previewUrl));
       mediaResourcesRef.current.forEach((resource) => previewUrls.add(resource.previewUrl));
+      if (videoCoverRef.current?.previewUrl.startsWith("blob:")) previewUrls.add(videoCoverRef.current.previewUrl);
       editUndoRef.current.forEach((entry) => {
         if (entry.kind === "editor") collectSnapshotUrls(entry.snapshot);
       });
@@ -2756,6 +2819,7 @@ export default function LosslessVideoPage() {
     || enabledSubtitleTracks.length > 0
     || videoClips.length === 0
     || hasVideoEdits
+    || Boolean(videoCover)
     ? "precise-reencode"
     : "keyframe-copy";
   const videoOutputReencoded = hasImageTracks
@@ -2766,11 +2830,13 @@ export default function LosslessVideoPage() {
     || projectCanvasChanged
     || enabledSubtitleTracks.length > 0
     || videoClips.length === 0
+    || Boolean(videoCover)
     || automaticExportMode === "precise-reencode";
 
   const canExport = projectVideoDuration > 0
     && !taskRunning
-    && (videoClips.length > 0 || enabledTracks.length > 0);
+    && (videoClips.length > 0 || enabledTracks.length > 0)
+    && (!videoCover || Boolean(videoCover.file));
   const stepElapsed = stepStartedAt ? formatElapsed((stepFinishedAt || clockNow) - stepStartedAt) : "";
   const showStepElapsed = Boolean(stepElapsed) && status !== "idle";
   const canUndoEdit = editUndoRef.current.length > 0;
@@ -2889,7 +2955,8 @@ export default function LosslessVideoPage() {
     currentTime: currentTimeRef.current,
     videoSize: { ...videoSize },
     projectSourceSize: { ...projectSourceSize },
-    projectAspectPreset
+    projectAspectPreset,
+    videoCover: cloneProjectVideoCover(videoCoverRef.current)
   });
 
   const pushHistoryEntry = (entry: EditHistoryEntry) => {
@@ -2903,6 +2970,62 @@ export default function LosslessVideoPage() {
     if (editorSnapshotFingerprint(previous) === editorSnapshotFingerprint(current)) return false;
     pushHistoryEntry({ kind: "editor", snapshot: cloneEditorSnapshot(previous) });
     return true;
+  };
+
+  const commitVideoCover = (next?: ProjectVideoCover) => {
+    videoCoverRef.current = next;
+    setVideoCover(next);
+  };
+
+  const useCurrentFrameAsCover = async () => {
+    if (projectVideoDuration <= 0) {
+      notify({ type: "error", title: "无法设置封面", message: "时间轴中还没有可用画面。" });
+      return;
+    }
+    const historySnapshot = captureEditorSnapshot();
+    const coverTime = roundTimelineFrame(clampValue(currentTimeRef.current, 0, projectVideoDuration));
+    const cover = videoRef.current ? await captureVideoFrameCover(videoRef.current) : undefined;
+    if (!cover) {
+      notify({ type: "error", title: "无法设置封面", message: "当前画面尚未加载完成，请播放或定位到画面后重试。" });
+      return;
+    }
+    commitVideoCover({
+      mode: "frame",
+      time: coverTime,
+      previewUrl: cover.previewUrl,
+      name: `当前画面 ${formatTimelineTimecode(coverTime, timelineFps)}`,
+      width: cover.width,
+      height: cover.height,
+      file: cover.file
+    });
+    pushEditorHistory(historySnapshot);
+  };
+
+  const useUploadedImageAsCover = async (file: File) => {
+    if (!isImageFile(file)) {
+      notify({ type: "error", title: "无法设置封面", message: "请选择 JPG、PNG、WebP 或 BMP 图片。" });
+      return;
+    }
+    const historySnapshot = captureEditorSnapshot();
+    const previewUrl = URL.createObjectURL(file);
+    const size = await readImageSize(previewUrl);
+    commitVideoCover({
+      mode: "upload",
+      time: 0,
+      previewUrl,
+      name: file.name,
+      width: size.width,
+      height: size.height,
+      file
+    });
+    pushEditorHistory(historySnapshot);
+  };
+
+  const removeVideoCover = () => {
+    if (!videoCoverRef.current) return;
+    const historySnapshot = captureEditorSnapshot();
+    commitVideoCover(undefined);
+    pushEditorHistory(historySnapshot);
   };
 
   const restoreEditorSnapshot = (requestedSnapshot: EditorHistorySnapshot) => {
@@ -2923,6 +3046,7 @@ export default function LosslessVideoPage() {
     tracksRef.current = snapshot.tracks;
     effectsRef.current = snapshot.effects;
     subtitleTracksRef.current = snapshot.subtitleTracks;
+    videoCoverRef.current = snapshot.videoCover;
     timelineLaneOrderRef.current = snapshot.timelineLaneOrder;
     setVideoSources(snapshot.videoSources);
     setMediaResources(snapshot.mediaResources);
@@ -2930,6 +3054,7 @@ export default function LosslessVideoPage() {
     setTracks(snapshot.tracks);
     setEffects(snapshot.effects);
     setSubtitleTracks(snapshot.subtitleTracks);
+    setVideoCover(snapshot.videoCover);
     setTimelineLaneOrder(snapshot.timelineLaneOrder);
     setVideoSize(snapshot.videoSize);
     setProjectSourceSize(snapshot.projectSourceSize || snapshot.videoSize);
@@ -6443,6 +6568,7 @@ export default function LosslessVideoPage() {
         || hasVideoAudioAdjustments
         || projectCanvasChanged
         || enabledSubtitleTracks.length
+        || videoCover
       );
       const outputSuffix = hasProjectEdits ? "_edited.mp4" : "_clean.mp4";
       const projectSourceName = videoInput?.name || importedResources[0]?.name || "timeline.mp4";
@@ -6587,6 +6713,14 @@ export default function LosslessVideoPage() {
           effects: exportEffects,
           subtitleTracks: exportSubtitleTracks,
           subtitleMode: automaticSubtitleMode,
+          cover: videoCover
+            ? {
+                mode: videoCover.mode,
+                time: videoCover.mode === "frame"
+                  ? clampValue(videoCover.time, 0, projectVideoDuration)
+                  : undefined
+              }
+            : undefined,
           mode: automaticExportMode,
           outputName
         },
@@ -6612,12 +6746,17 @@ export default function LosslessVideoPage() {
                   detail: `正在上传原视频与时间轴素材 ${Math.round(fraction * 100)}%`
                 }
           );
-        }
+        },
+        videoCover?.file
       );
       reusableSourceTaskIdRef.current = undefined;
       downloadVideoOutput(response.taskId || exportTaskId, outputName);
       setStatus("done");
-      setProgress({ percent: 100, label: "导出完成", detail: `${response.message || "已输出 MP4"}，文件已开始保存：${outputName}` });
+      setProgress({
+        percent: 100,
+        label: "导出完成",
+        detail: `${response.message || "已输出 MP4"}，视频已开始保存`
+      });
     } catch (err) {
       reusableSourceTaskIdRef.current = undefined;
       const message = err instanceof Error ? err.message : "导出失败";
@@ -7315,6 +7454,10 @@ export default function LosslessVideoPage() {
               <Sparkles size={16} />
               特效
             </button>
+            <button className={inspectorTab === "cover" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "cover"} onClick={() => setInspectorTab("cover")}>
+              <ImageIcon size={16} />
+              封面
+            </button>
             <button className={inspectorTab === "export" ? "is-active" : ""} type="button" role="tab" aria-selected={inspectorTab === "export"} onClick={() => setInspectorTab("export")}>
               <Download size={16} />
               导出
@@ -7361,6 +7504,17 @@ export default function LosslessVideoPage() {
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void importSubtitleFile(file);
+            event.currentTarget.value = "";
+          }}
+        />
+        <input
+          ref={videoCoverInputRef}
+          className="lossless-file-input"
+          type="file"
+          accept="image/*,.png,.jpg,.jpeg,.webp,.bmp"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            if (file) void useUploadedImageAsCover(file);
             event.currentTarget.value = "";
           }}
         />
@@ -7438,6 +7592,9 @@ export default function LosslessVideoPage() {
                         ) : (
                           <div className="lossless-preview-canvas" onClick={togglePlayback} />
                         )}
+                        {videoCover?.previewUrl && !isPlaying && safeCurrentTime <= 1 / timelineFps + 0.0005 ? (
+                          <img className="lossless-video-cover-poster" src={videoCover.previewUrl} alt="视频封面" draggable={false} />
+                        ) : null}
                       </div>
                       <div
                         className="lossless-media-overlay"
@@ -9058,6 +9215,62 @@ export default function LosslessVideoPage() {
                     </section>
                   ) : null}
                 </div>
+              ) : inspectorTab === "cover" ? (
+                <div className="lossless-inspector-content lossless-cover-inspector">
+                  <button className="primary-button lossless-inspector-action" type="button" onClick={useCurrentFrameAsCover} disabled={projectVideoDuration <= 0 || taskRunning}>
+                    <ImageIcon size={17} />
+                    使用当前画面
+                  </button>
+                  <section className="lossless-inspector-section">
+                    <div className="lossless-section-title-row">
+                      <h3>视频封面</h3>
+                      <span>{videoCover ? "已设置" : "未设置"}</span>
+                    </div>
+                    <div
+                      className={`lossless-cover-preview ${videoCover ? "has-cover" : ""}`}
+                      style={{ aspectRatio: `${Math.max(1, videoSize.width)} / ${Math.max(1, videoSize.height)}` }}
+                    >
+                      {videoCover?.previewUrl ? (
+                        <img src={videoCover.previewUrl} alt="视频封面预览" />
+                      ) : (
+                        <div>
+                          <ImageIcon size={25} />
+                          <span>{videoCover?.mode === "frame" ? "导出时生成当前画面" : "尚未设置视频封面"}</span>
+                        </div>
+                      )}
+                    </div>
+                    {videoCover ? (
+                      <dl className="lossless-cover-details">
+                        <div><dt>来源</dt><dd>{videoCover.mode === "frame" ? "当前画面" : "上传图片"}</dd></div>
+                        <div><dt>名称</dt><dd title={videoCover.name}>{videoCover.name}</dd></div>
+                        {videoCover.mode === "frame" ? (
+                          <div><dt>时间</dt><dd>{formatTimelineTimecode(clampValue(videoCover.time, 0, projectVideoDuration), timelineFps)}</dd></div>
+                        ) : (
+                          <div><dt>尺寸</dt><dd>{videoCover.width && videoCover.height ? `${videoCover.width} × ${videoCover.height}` : "自动识别"}</dd></div>
+                        )}
+                      </dl>
+                    ) : null}
+                    <div className="lossless-cover-actions">
+                      <button type="button" disabled={taskRunning} onClick={() => videoCoverInputRef.current?.click()}>
+                        <FolderOpen size={15} />
+                        上传图片
+                      </button>
+                      <button className="text-danger" type="button" disabled={!videoCover || taskRunning} onClick={removeVideoCover}>
+                        <Trash2 size={15} />
+                        移除
+                      </button>
+                    </div>
+                  </section>
+                  <section className="lossless-inspector-section lossless-inspector-summary">
+                    <h3>首帧说明</h3>
+                    <dl><dt>写入方式</dt><dd>视频第 1 帧</dd></dl>
+                    <dl><dt>视频时长</dt><dd>保持不变</dd></dl>
+                    <dl><dt>声音时间</dt><dd>保持不变</dd></dl>
+                    <p className="lossless-cover-note">
+                      封面会替换导出视频的第一帧，不会插入额外时长或移动声音。修改实际画面需要对视频轨进行一次高质量编码。
+                    </p>
+                  </section>
+                </div>
               ) : inspectorTab === "export" ? (
                 <div className="lossless-inspector-content lossless-export-inspector">
                   <button className="primary-button lossless-inspector-action" type="button" onClick={runExport} disabled={!canExport}>
@@ -9070,7 +9283,9 @@ export default function LosslessVideoPage() {
                       <div className={`lossless-export-boundary ${!videoOutputReencoded ? "is-lossless" : "is-reencode"}`}>
                         {!videoOutputReencoded ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
                         <span>
-                          {enabledSubtitleTracks.length
+                          {videoCover
+                            ? "封面将成为导出视频的第一帧；视频轨会高质量编码，视频时长与声音时间轴保持不变。"
+                            : enabledSubtitleTracks.length
                             ? `将 ${enabledSubtitleTracks.reduce((count, track) => count + track.cues.length, 0)} 条字幕烧录到画面，视频轨需要高质量重编码。`
                             : projectCanvasChanged
                             ? `作品比例已设为 ${formatProjectAspect(videoSize)}，需要按 ${Math.round(videoSize.width)} × ${Math.round(videoSize.height)} 项目画布高质量重编码。`
@@ -9104,6 +9319,10 @@ export default function LosslessVideoPage() {
                       <dl><dt>片段调色</dt><dd>{hasVideoColorAdjustments ? "已启用" : "未启用"}</dd></dl>
                       <dl><dt>视频特效</dt><dd>{enabledEffects.length}</dd></dl>
                       <dl><dt>字幕</dt><dd>{enabledSubtitleTracks.length ? `${enabledSubtitleTracks.reduce((count, track) => count + track.cues.length, 0)} 条 · 自动烧录` : "无"}</dd></dl>
+                      <dl>
+                        <dt>视频封面</dt>
+                        <dd>{videoCover ? videoCover.mode === "frame" ? `当前画面 ${formatTimelineTimecode(clampValue(videoCover.time, 0, projectVideoDuration), timelineFps)}` : "上传图片" : "未设置"}</dd>
+                      </dl>
                       <dl><dt>封装格式</dt><dd>MP4</dd></dl>
                     </section>
                   </div>
