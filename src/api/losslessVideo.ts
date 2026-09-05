@@ -199,6 +199,10 @@ export type SubtitleStyle = {
   backgroundColor: string;
   backgroundAlpha: number;
   backgroundBlur: number;
+  backgroundX: number;
+  backgroundY: number;
+  backgroundWidth: number;
+  backgroundHeight: number;
   x: number;
   position: number;
   width: number;

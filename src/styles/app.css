@@ -5796,8 +5796,8 @@ input {
 }
 
 .lossless-operation-log-overlay {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  inset: 50px 0 0;
   z-index: 5000;
   display: flex;
   justify-content: flex-end;
@@ -6527,6 +6527,17 @@ input {
   transform: translateX(-50%);
 }
 
+.lossless-timeline-marquee {
+  position: absolute;
+  z-index: 8;
+  display: none;
+  min-width: 1px;
+  border: 1px solid var(--color-primary);
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  pointer-events: none;
+}
+
 .lossless-media-track-clip {
   position: absolute;
   top: 2px;
@@ -6547,6 +6558,7 @@ input {
 }
 
 .lossless-media-track-clip.is-video-clip {
+  min-width: 0;
   padding-inline: 11px;
 }
 
@@ -11654,6 +11666,33 @@ input {
 }
 
 /* Video editor subtitles */
+.lossless-subtitle-background-preview {
+  position: absolute;
+  z-index: 79;
+  min-width: 2px;
+  min-height: 2px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  transform: translate3d(-50%, -50%, 0);
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
+  overflow: visible;
+}
+
+.lossless-subtitle-background-preview:hover,
+.lossless-subtitle-background-preview:focus,
+.lossless-subtitle-background-preview:focus-visible,
+.lossless-subtitle-background-preview:active {
+  outline: 0;
+  box-shadow: none;
+}
+
+.lossless-subtitle-background-preview.is-selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-bg) 72%, transparent);
+}
+
 .lossless-subtitle-preview {
   position: absolute;
   z-index: 80;
@@ -11694,6 +11733,10 @@ input {
 
 .lossless-subtitle-preview.is-selected {
   border-color: var(--color-primary);
+}
+
+.lossless-subtitle-preview.is-background-editing {
+  pointer-events: none;
 }
 
 .lossless-subtitle-transform-handle {
@@ -11995,6 +12038,19 @@ input {
 
 .lossless-subtitle-property-list.is-secondary .lossless-subtitle-property-row.is-slider {
   grid-template-columns: 58px minmax(70px, 1fr) 48px;
+}
+
+.lossless-subtitle-canvas-target.segmented-control {
+  width: 100%;
+  min-width: 0;
+}
+
+.lossless-subtitle-canvas-target.segmented-control button {
+  min-width: 0;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 7px;
+  font-size: 12px;
 }
 
 .lossless-subtitle-language-row {

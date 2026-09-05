@@ -25,6 +25,10 @@ export const defaultSubtitleStyle: SubtitleStyle = {
   backgroundColor: "#000000",
   backgroundAlpha: 0,
   backgroundBlur: 16,
+  backgroundX: 50,
+  backgroundY: 88,
+  backgroundWidth: 72,
+  backgroundHeight: 8,
   x: 50,
   position: 88,
   width: 72,
@@ -168,6 +172,9 @@ export function layoutSubtitleForCanvas(text: string, style: SubtitleStyle, canv
 }
 
 export function subtitleBackgroundHeightPercent(text: string, style: SubtitleStyle, canvasWidth: number, canvasHeight: number) {
+  if (Number.isFinite(style.backgroundHeight) && style.backgroundHeight >= 2) {
+    return Math.max(2, Math.min(100, style.backgroundHeight));
+  }
   const lineCount = Math.max(1, layoutSubtitleForCanvas(text, style, canvasWidth).split("\n").length);
   // Keep this geometry in lockstep with the preview box and the native export renderer.
   const heightPixels = lineCount * style.fontSize * 1.28 + style.fontSize * 0.16 + 2;

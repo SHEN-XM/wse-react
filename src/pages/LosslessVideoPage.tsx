@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  Combine,
   Copy,
   Diamond,
   Download,
@@ -41,6 +42,7 @@ import {
   Trash2,
   Type,
   Undo2,
+  Unlink2,
   Volume2,
   VolumeX,
   ZoomIn,
@@ -195,6 +197,7 @@ type AudioEditorTrack = EditorTrackBase & {
   sourceEnd: number;
   audioPeaks: number[];
   detachedFromVideoClipId?: string;
+  attachedToVideoClipId?: string;
   sourceVideoSourceId?: string;
   volume: number;
   fadeIn: number;
@@ -240,6 +243,7 @@ type ImportedAudioResource = {
   duration: number;
   audioPeaks: number[];
   detachedFromVideoSourceId?: string;
+  internal?: boolean;
 };
 
 type ImportedImageResource = {
@@ -281,6 +285,7 @@ type EffectMaskTransformAction = "move" | `resize-${EffectMaskResizeHandle}`;
 const subtitleResizeHandles = ["nw", "ne", "e", "se", "sw", "w"] as const;
 type SubtitleResizeHandle = (typeof subtitleResizeHandles)[number];
 type SubtitleTransformAction = "move" | `resize-${SubtitleResizeHandle}`;
+type SubtitleCanvasTarget = "text" | "background";
 
 type VideoEditorClip = {
   id: string;
@@ -297,6 +302,16 @@ type VideoEditorClip = {
   audioDetached?: boolean;
   transform?: VideoTransform;
   color?: VideoColorAdjustments;
+  mergeGroupId?: string;
+};
+
+type TimelineVideoMaterial = {
+  id: string;
+  clips: VideoEditorClip[];
+  first: VideoEditorClip;
+  last: VideoEditorClip;
+  start: number;
+  end: number;
 };
 
 type EditorEffect = ExportVideoEffect & {
@@ -420,6 +435,70 @@ function cloneVideoEditorClip(clip: VideoEditorClip): VideoEditorClip {
     transform: clip.transform ? { ...clip.transform } : undefined,
     color: clip.color ? cloneVideoColor(clip.color) : undefined
   };
+}
+
+function mergeableVideoClips(videoClips: VideoEditorClip[], selectedIds: string[]) {
+  if (selectedIds.length < 2) return [];
+  const selectedIdSet = new Set(selectedIds);
+  const clips = videoClips
+    .filter((clip) => selectedIdSet.has(clip.id))
+    .sort((left, right) => left.start - right.start);
+  if (clips.length !== selectedIdSet.size || clips.length < 2) return [];
+
+  const first = clips[0];
+  if (clips.some((clip) => clip.laneId !== first.laneId)) return [];
+  return clips;
+}
+
+function timelineVideoMaterials(clips: VideoEditorClip[]): TimelineVideoMaterial[] {
+  const sorted = [...clips].sort((left, right) => left.start - right.start || left.end - right.end);
+  const consumed = new Set<string>();
+  return sorted.flatMap((clip) => {
+    if (consumed.has(clip.id)) return [];
+    const materialClips = clip.mergeGroupId
+      ? sorted.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+      : [clip];
+    materialClips.forEach((item) => consumed.add(item.id));
+    const first = materialClips[0];
+    const last = materialClips[materialClips.length - 1];
+    return [{
+      id: clip.mergeGroupId || clip.id,
+      clips: materialClips,
+      first,
+      last,
+      start: first.start,
+      end: last.end
+    }];
+  });
+}
+
+function collapsibleVideoClips(videoClips: VideoEditorClip[], selectedIds: string[]) {
+  const clips = mergeableVideoClips(videoClips, selectedIds);
+  if (clips.length < 2) return [];
+  const first = clips[0];
+  const propertySignature = (clip: VideoEditorClip) => JSON.stringify({
+    sourceId: clip.sourceId,
+    name: clip.name,
+    volume: clip.volume,
+    audioDetached: Boolean(clip.audioDetached),
+    transform: clip.transform || null,
+    color: clip.color || null
+  });
+  const signature = propertySignature(first);
+  const frameTolerance = 1 / timelineFps + 0.0005;
+
+  if (first.audioDetached) return [];
+  for (let index = 0; index < clips.length; index += 1) {
+    const clip = clips[index];
+    if (clip.laneId !== first.laneId || propertySignature(clip) !== signature) return [];
+    if (index === 0) continue;
+    const previous = clips[index - 1];
+    if (
+      Math.abs(previous.end - clip.start) > frameTolerance
+      || Math.abs(previous.sourceEnd - clip.sourceStart) > frameTolerance
+    ) return [];
+  }
+  return clips;
 }
 
 function cloneColorWheel(wheel: ColorWheelValue): ColorWheelValue {
@@ -755,6 +834,12 @@ function readSubtitleStyle(value: Partial<SubtitleStyle> | undefined): SubtitleS
   const migratedBackgroundBlur = legacyMask.originalMaskEnabled
     ? 1 + clampValue(readNumberSetting(legacyMask.originalMaskBlur, 0.7), 0.05, 1) * 22
     : defaultSubtitleStyle.backgroundBlur;
+  const backgroundMask = normalizeEffectMask({
+    x: readNumberSetting(style.backgroundX, readNumberSetting(style.x, legacyX)),
+    y: readNumberSetting(style.backgroundY, readNumberSetting(style.position, defaultSubtitleStyle.position)),
+    width: readNumberSetting(style.backgroundWidth, readNumberSetting(style.width, defaultSubtitleStyle.width)),
+    height: readNumberSetting(style.backgroundHeight, defaultSubtitleStyle.backgroundHeight)
+  });
   return {
     fontFamily: typeof style.fontFamily === "string" && style.fontFamily.trim() ? style.fontFamily.trim() : defaultSubtitleStyle.fontFamily,
     fontSize: clampValue(readNumberSetting(style.fontSize, defaultSubtitleStyle.fontSize), 12, 160),
@@ -767,6 +852,10 @@ function readSubtitleStyle(value: Partial<SubtitleStyle> | undefined): SubtitleS
     backgroundColor: color(style.backgroundColor, defaultSubtitleStyle.backgroundColor),
     backgroundAlpha: clampValue(readNumberSetting(style.backgroundAlpha, defaultSubtitleStyle.backgroundAlpha), 0, 1),
     backgroundBlur: clampValue(readNumberSetting(style.backgroundBlur, migratedBackgroundBlur), 0, 23),
+    backgroundX: backgroundMask.x,
+    backgroundY: backgroundMask.y,
+    backgroundWidth: backgroundMask.width,
+    backgroundHeight: backgroundMask.height,
     x: clampValue(readNumberSetting(style.x, legacyX), 0, 100),
     position: clampValue(readNumberSetting(style.position, defaultSubtitleStyle.position), 0, 100),
     width: clampValue(readNumberSetting(style.width, defaultSubtitleStyle.width), 5, 100),
@@ -2254,6 +2343,7 @@ export default function LosslessVideoPage() {
   const timelinePlayheadRef = useRef<HTMLElement | null>(null);
   const timelineLaneDropIndicatorRef = useRef<HTMLDivElement | null>(null);
   const timelineBladeGuideRef = useRef<HTMLDivElement | null>(null);
+  const timelineMarqueeRef = useRef<HTMLDivElement | null>(null);
   const audioPreviewRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const imageOverlayRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const imageMotionPathRef = useRef<SVGPolylineElement | null>(null);
@@ -2298,6 +2388,7 @@ export default function LosslessVideoPage() {
   const [selectedResourceId, setSelectedResourceId] = useState("");
   const [activeVideoClipId, setActiveVideoClipId] = useState("");
   const [selectedVideoClipId, setSelectedVideoClipId] = useState("");
+  const [selectedVideoClipIds, setSelectedVideoClipIds] = useState<string[]>([]);
   const [timelineLaneOrder, setTimelineLaneOrder] = useState<string[]>([]);
   const [duration, setDuration] = useState(0);
   const [videoSize, setVideoSize] = useState<PreviewSize>({ width: 1920, height: 1080 });
@@ -2319,6 +2410,7 @@ export default function LosslessVideoPage() {
   const [selectedEffectId, setSelectedEffectId] = useState("");
   const [selectedSubtitleTrackId, setSelectedSubtitleTrackId] = useState("");
   const [selectedSubtitleCueId, setSelectedSubtitleCueId] = useState("");
+  const [subtitleCanvasTarget, setSubtitleCanvasTarget] = useState<SubtitleCanvasTarget>("text");
   const [selectedLaneId, setSelectedLaneId] = useState("");
   const [selectedKeyframeId, setSelectedKeyframeId] = useState("");
   const [timelineTool, setTimelineTool] = useState<TimelineTool>("select");
@@ -2463,6 +2555,14 @@ export default function LosslessVideoPage() {
   useEffect(() => {
     videoClipsRef.current = videoClips;
   }, [videoClips]);
+
+  useEffect(() => {
+    setSelectedVideoClipIds((current) => {
+      if (!selectedVideoClipId) return current.length ? [] : current;
+      if (current.includes(selectedVideoClipId)) return current;
+      return [selectedVideoClipId];
+    });
+  }, [selectedVideoClipId]);
 
   useEffect(() => {
     videoCoverRef.current = videoCover;
@@ -2776,7 +2876,15 @@ export default function LosslessVideoPage() {
   const enabledVisualEffects = useMemo(() => visualEffects.filter((effect) => effect.enabled), [visualEffects]);
   const enabledWatermarkEffects = useMemo(() => watermarkEffects.filter((effect) => effect.enabled), [watermarkEffects]);
   const enabledSubtitleTracks = useMemo(() => subtitleTracks.filter((track) => track.enabled && track.cues.length), [subtitleTracks]);
-  const importedResources = useMemo<ImportedResource[]>(() => [...videoSources, ...mediaResources], [mediaResources, videoSources]);
+  const importedResources = useMemo<ImportedResource[]>(
+    () => [...videoSources, ...mediaResources.filter((resource) => resource.type !== "audio" || !resource.internal)],
+    [mediaResources, videoSources]
+  );
+  const visibleVideoMaterialCount = useMemo(() => timelineVideoMaterials(videoClips).length, [videoClips]);
+  const visibleTimelineTrackCount = useMemo(
+    () => tracks.filter((track) => track.type !== "audio" || !track.attachedToVideoClipId).length,
+    [tracks]
+  );
   const usedVideoSourceIds = useMemo(() => new Set(videoClips.map((clip) => clip.sourceId)), [videoClips]);
   const usedMediaSourceIds = useMemo(() => new Set(tracks.map((track) => track.sourceId)), [tracks]);
   const projectVideoDuration = useMemo(
@@ -2915,18 +3023,20 @@ export default function LosslessVideoPage() {
     ...videoClips.flatMap((clip) => {
       const source = videoSources.find((item) => item.id === clip.sourceId);
       if (!source?.hasAudio) return [];
+      const attachedAudio = tracks.find((track): track is AudioEditorTrack =>
+        track.type === "audio" && track.attachedToVideoClipId === clip.id);
       return [{
         id: `video:${clip.id}`,
         label: `视频 · ${clip.name} (${formatSeconds(clip.start)})`,
-        file: source.file,
-        sourceStart: clip.sourceStart,
-        sourceEnd: clip.sourceEnd,
+        file: attachedAudio?.file || source.file,
+        sourceStart: attachedAudio?.sourceStart ?? clip.sourceStart,
+        sourceEnd: attachedAudio?.sourceEnd ?? clip.sourceEnd,
         timelineStart: clip.start,
         laneId: clip.laneId,
         linkedVideoClipId: clip.id
       }];
     }),
-    ...tracks.flatMap((track) => track.type === "audio" ? [{
+    ...tracks.flatMap((track) => track.type === "audio" && !track.attachedToVideoClipId ? [{
       id: `audio:${track.id}`,
       label: `音频 · ${track.name} (${formatSeconds(track.start)})`,
       file: track.file,
@@ -2967,6 +3077,7 @@ export default function LosslessVideoPage() {
       else lanes.set(clip.laneId, { id: clip.laneId, type: "video", clips: [], videoClips: [clip], effects: [], subtitleCues: [] });
     });
     tracks.forEach((track) => {
+      if (track.type === "audio" && track.attachedToVideoClipId) return;
       const laneId = track.laneId || track.id;
       const lane = lanes.get(laneId);
       if (lane) lane.clips.push(track);
@@ -3568,6 +3679,7 @@ export default function LosslessVideoPage() {
     setSelectedEffectId(snapshot.selectedEffectId || "");
     setSelectedSubtitleTrackId(snapshot.selectedSubtitleTrackId || "");
     setSelectedSubtitleCueId(snapshot.selectedSubtitleCueId || "");
+    setSubtitleCanvasTarget("text");
     setSelectedLaneId(snapshot.selectedLaneId);
     setSelectedKeyframeId(snapshot.selectedKeyframeId);
     resetResult();
@@ -3594,6 +3706,7 @@ export default function LosslessVideoPage() {
     setSelectedEffectId("");
     setSelectedSubtitleTrackId(track.id);
     setSelectedSubtitleCueId(cue.id);
+    setSubtitleCanvasTarget("text");
     setSelectedLaneId(track.laneId);
     setSelectedKeyframeId("");
     setInspectorTab("subtitles");
@@ -3609,6 +3722,7 @@ export default function LosslessVideoPage() {
     setSelectedEffectId("");
     setSelectedSubtitleTrackId(track.id);
     setSelectedSubtitleCueId(allSubtitleCuesSelectionId);
+    setSubtitleCanvasTarget("text");
     setSelectedLaneId(track.laneId);
     setSelectedKeyframeId("");
     setInspectorTab("subtitles");
@@ -3925,6 +4039,127 @@ export default function LosslessVideoPage() {
     window.addEventListener("pointercancel", handleUp, { once: true });
   };
 
+  const startSubtitleBackgroundCanvasTransform = (
+    event: ReactPointerEvent<HTMLElement>,
+    track: EditorSubtitleTrack,
+    cue: SubtitleCue,
+    action: EffectMaskTransformAction
+  ) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const element = event.currentTarget.closest(".lossless-subtitle-background-preview") as HTMLElement | null;
+    const stage = element?.closest(".lossless-media-overlay") as HTMLElement | null;
+    if (!element || !stage) return;
+
+    const historySnapshot = captureEditorSnapshot();
+    const style = readSubtitleStyle(track.style);
+    const initialMask = normalizeEffectMask({
+      x: style.backgroundX,
+      y: style.backgroundY,
+      width: style.backgroundWidth,
+      height: style.backgroundHeight
+    });
+    const stageRect = stage.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let latestMask = initialMask;
+    let moved = false;
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+
+    videoRef.current?.pause();
+    audioPreviewRefs.current.forEach((audio) => audio.pause());
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+    if (selectedSubtitleTrackId !== track.id || (selectedSubtitleCueId !== cue.id && selectedSubtitleCueId !== allSubtitleCuesSelectionId)) {
+      selectSubtitleCue(track.id, cue.id, false);
+    }
+    setSubtitleCanvasTarget("background");
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = action === "move"
+      ? "grabbing"
+      : action.endsWith("nw") || action.endsWith("se") ? "nwse-resize" : "nesw-resize";
+
+    const paint = (mask: VideoEffectMask) => {
+      element.style.left = `${mask.x}%`;
+      element.style.top = `${mask.y}%`;
+      element.style.width = `${mask.width}%`;
+      element.style.height = `${mask.height}%`;
+    };
+    const move = (moveEvent: PointerEvent) => {
+      const dxPixels = moveEvent.clientX - startX;
+      const dyPixels = moveEvent.clientY - startY;
+      if (!moved && Math.hypot(dxPixels, dyPixels) < 2) return;
+      moved = true;
+      const dx = dxPixels / Math.max(1, stageRect.width) * 100;
+      const dy = dyPixels / Math.max(1, stageRect.height) * 100;
+      if (action === "move") {
+        const snapped = snapCanvasPosition(
+          initialMask.x + dx,
+          initialMask.y + dy,
+          initialMask.width,
+          initialMask.height,
+          stageRect.width,
+          stageRect.height
+        );
+        paintCanvasSnapGuides(snapped.verticalGuide, snapped.horizontalGuide);
+        latestMask = normalizeEffectMask({ ...initialMask, x: snapped.x, y: snapped.y });
+      } else {
+        clearCanvasSnapGuides();
+        const handle = action.slice("resize-".length) as EffectMaskResizeHandle;
+        const minimumSize = 2;
+        const initialLeft = initialMask.x - initialMask.width / 2;
+        const initialRight = initialMask.x + initialMask.width / 2;
+        const initialTop = initialMask.y - initialMask.height / 2;
+        const initialBottom = initialMask.y + initialMask.height / 2;
+        const left = handle.includes("w")
+          ? clampValue(initialLeft + dx, 0, initialRight - minimumSize)
+          : initialLeft;
+        const right = handle.includes("e")
+          ? clampValue(initialRight + dx, initialLeft + minimumSize, 100)
+          : initialRight;
+        const top = handle.includes("n")
+          ? clampValue(initialTop + dy, 0, initialBottom - minimumSize)
+          : initialTop;
+        const bottom = handle.includes("s")
+          ? clampValue(initialBottom + dy, initialTop + minimumSize, 100)
+          : initialBottom;
+        latestMask = normalizeEffectMask({
+          x: (left + right) / 2,
+          y: (top + bottom) / 2,
+          width: right - left,
+          height: bottom - top
+        });
+      }
+      paint(latestMask);
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+      clearCanvasSnapGuides();
+      if (!moved) return;
+      const nextStyle = readSubtitleStyle({
+        ...track.style,
+        backgroundX: latestMask.x,
+        backgroundY: latestMask.y,
+        backgroundWidth: latestMask.width,
+        backgroundHeight: latestMask.height
+      });
+      commitSubtitleTracks(subtitleTracksRef.current.map((item) => item.id === track.id
+        ? { ...item, style: nextStyle }
+        : item));
+      setSubtitlePreferences((current) => ({ ...current, style: nextStyle }));
+      pushEditorHistory(historySnapshot);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish, { once: true });
+    window.addEventListener("pointercancel", finish, { once: true });
+  };
+
   const beginSubtitlePropertyEdit = () => {
     if (!subtitlePropertyHistoryRef.current) subtitlePropertyHistoryRef.current = captureEditorSnapshot();
   };
@@ -4096,6 +4331,7 @@ export default function LosslessVideoPage() {
     if (!row) return;
     const historySnapshot = captureEditorSnapshot();
     const playheadLock = action === "move" ? lockTimelinePlayheadForMaterialDrag() : null;
+    const rowRect = row.getBoundingClientRect();
     const pointerStart = event.clientX;
     const originalStart = cue.start;
     const originalEnd = cue.end;
@@ -4106,7 +4342,13 @@ export default function LosslessVideoPage() {
     clipElement?.classList.add("is-dragging", action === "move" ? "is-moving" : "is-trimming");
     selectSubtitleCue(track.id, cue.id, false);
     const handleMove = (moveEvent: PointerEvent) => {
-      const delta = ((moveEvent.clientX - pointerStart) / Math.max(1, row.getBoundingClientRect().width)) * timelineDisplayDuration;
+      const delta = ((moveEvent.clientX - pointerStart) / Math.max(1, rowRect.width)) * timelineDisplayDuration;
+      const snapThreshold = timelineSnapDistancePx / Math.max(1, rowRect.width) * timelineDisplayDuration;
+      const snapTargets = [
+        0,
+        currentTimeRef.current,
+        ...track.cues.filter((itemCue) => itemCue.id !== cue.id).flatMap((itemCue) => [itemCue.start, itemCue.end])
+      ];
       if (Math.abs(moveEvent.clientX - pointerStart) > 2) {
         moved = true;
         trackDragMovedRef.current = true;
@@ -4114,7 +4356,12 @@ export default function LosslessVideoPage() {
       let start = originalStart;
       let end = originalEnd;
       if (action === "move") {
-        const preferredStart = roundTimelineFrame(originalStart + delta);
+        const preferredStart = snapTimelineClipStart(
+          originalStart + delta,
+          duration,
+          snapTargets,
+          snapThreshold
+        );
         const availableStart = findNearestAvailableClipStart(
           track.cues.filter((itemCue) => itemCue.id !== cue.id),
           preferredStart,
@@ -4126,9 +4373,17 @@ export default function LosslessVideoPage() {
         start = roundTimelineFrame(availableStart);
         end = start + duration;
       } else if (action === "trim-start") {
-        start = clampValue(roundTimelineFrame(originalStart + delta), bounds.minimumStart, originalEnd - minimumTimelineClipDuration);
+        start = clampValue(
+          snapTimelineValue(originalStart + delta, snapTargets, snapThreshold),
+          bounds.minimumStart,
+          originalEnd - minimumTimelineClipDuration
+        );
       } else {
-        end = clampValue(roundTimelineFrame(originalEnd + delta), originalStart + minimumTimelineClipDuration, bounds.maximumEnd);
+        end = clampValue(
+          snapTimelineValue(originalEnd + delta, snapTargets, snapThreshold),
+          originalStart + minimumTimelineClipDuration,
+          bounds.maximumEnd
+        );
       }
       const nextTracks = subtitleTracksRef.current.map((item) => item.id === track.id ? {
         ...item,
@@ -4297,13 +4552,51 @@ export default function LosslessVideoPage() {
       sourceMin: sourceSplitTime,
       sourceMax
     };
-    const nextClips = videoClipsRef.current
+    let nextClips = videoClipsRef.current
       .flatMap((item) => item.id === clip.id
         ? [{ ...cloneVideoEditorClip(item), end: splitTime, sourceEnd: sourceSplitTime, sourceMin, sourceMax: sourceSplitTime }, rightClip]
         : [item])
       .sort((left, right) => left.start - right.start);
+    if (clip.mergeGroupId) {
+      const leftIds = new Set(nextClips
+        .filter((item) => item.mergeGroupId === clip.mergeGroupId && item.end <= splitTime + 0.001)
+        .map((item) => item.id));
+      const rightIds = new Set(nextClips
+        .filter((item) => item.mergeGroupId === clip.mergeGroupId && item.start >= splitTime - 0.001)
+        .map((item) => item.id));
+      const rightMergeGroupId = createEditorId("video-merge");
+      nextClips = nextClips.map((item) => leftIds.has(item.id)
+        ? { ...item, mergeGroupId: leftIds.size > 1 ? clip.mergeGroupId : undefined }
+        : rightIds.has(item.id)
+          ? { ...item, mergeGroupId: rightIds.size > 1 ? rightMergeGroupId : undefined }
+          : item);
+    }
+    const nextTracks = tracksRef.current.flatMap((track): EditorTrack[] => {
+      if (track.type !== "audio" || track.attachedToVideoClipId !== clip.id) return [track];
+      const trackSplitTime = clampValue(
+        track.sourceStart + splitTime - clip.start,
+        track.sourceStart,
+        track.sourceEnd
+      );
+      return [
+        {
+          ...track,
+          end: splitTime,
+          sourceEnd: trackSplitTime
+        },
+        {
+          ...track,
+          id: createEditorId("audio"),
+          attachedToVideoClipId: rightClip.id,
+          start: splitTime,
+          sourceStart: trackSplitTime
+        }
+      ];
+    });
     videoClipsRef.current = nextClips;
+    tracksRef.current = nextTracks;
     setVideoClips(nextClips);
+    setTracks(nextTracks);
     if (subtitleTracksRef.current.some((track) => track.linkedVideoClipId === clip.id)) {
       commitSubtitleTracks(subtitleTracksRef.current.map((track) => track.linkedVideoClipId === clip.id
         ? { ...track, linkedVideoClipId: undefined }
@@ -4382,8 +4675,64 @@ export default function LosslessVideoPage() {
     if (taskRunning) return;
     const clip = videoClipsRef.current.find((item) => item.id === clipId);
     const source = videoSourcesRef.current.find((item) => item.id === clip?.sourceId);
-    if (!clip || !source?.hasAudio || clip.audioDetached) return;
-    if (tracksRef.current.some((track) => track.type === "audio" && track.detachedFromVideoClipId === clip.id)) return;
+    if (!clip || !source?.hasAudio) return;
+    const materialClips = clip.mergeGroupId
+      ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+      : [clip];
+    const materialClipIds = new Set(materialClips.map((item) => item.id));
+    const attachedTracks = tracksRef.current.filter((track): track is AudioEditorTrack =>
+      track.type === "audio" && Boolean(track.attachedToVideoClipId && materialClipIds.has(track.attachedToVideoClipId)));
+    if (attachedTracks.length) {
+      const historySnapshot = captureEditorSnapshot();
+      const laneId = createEditorId("audio-lane");
+      const attachedTrackIds = new Set(attachedTracks.map((track) => track.id));
+      const attachedSourceIds = new Set(attachedTracks.map((track) => track.sourceId));
+      const nextTracks = tracksRef.current.map((track) => track.type === "audio" && attachedTrackIds.has(track.id)
+        ? {
+            ...track,
+            laneId,
+            attachedToVideoClipId: undefined,
+            detachedFromVideoClipId: track.attachedToVideoClipId
+          }
+        : track);
+      const nextResources = mediaResourcesRef.current.map((resource) => attachedSourceIds.has(resource.id)
+        ? { ...resource, internal: false }
+        : resource);
+      tracksRef.current = nextTracks;
+      mediaResourcesRef.current = nextResources;
+      setTracks(nextTracks);
+      setMediaResources(nextResources);
+      const nextLaneOrder = mergeTimelineLaneOrder(
+        timelineLaneOrderRef.current,
+        videoClipsRef.current,
+        nextTracks,
+        effectsRef.current,
+        subtitleTracksRef.current
+      ).filter((item) => item !== laneId);
+      const videoLaneIndex = nextLaneOrder.indexOf(clip.laneId);
+      nextLaneOrder.splice(videoLaneIndex >= 0 ? videoLaneIndex + 1 : nextLaneOrder.length, 0, laneId);
+      timelineLaneOrderRef.current = nextLaneOrder;
+      setTimelineLaneOrder(nextLaneOrder);
+      setSelectedResourceId("");
+      setSelectedVideoClipId("");
+      setSelectedVideoClipIds([]);
+      setSelectedTrackId(attachedTracks[0].id);
+      setSelectedEffectId("");
+      setSelectedLaneId(laneId);
+      setSelectedKeyframeId("");
+      setInspectorTab("tracks");
+      pushEditorHistory(historySnapshot);
+      resetResult();
+      seekPreview(currentTimeRef.current, false, false);
+      return;
+    }
+    if (materialClips.some((item) => item.sourceId !== clip.sourceId)) {
+      notify({ type: "warning", title: "暂不能统一分离", message: "该复合素材包含多个不同的源视频，请取消合并后分别分离声音。" });
+      return;
+    }
+    if (materialClips.some((item) => item.audioDetached)) return;
+    if (tracksRef.current.some((track) =>
+      track.type === "audio" && Boolean(track.detachedFromVideoClipId && materialClipIds.has(track.detachedFromVideoClipId)))) return;
 
     const historySnapshot = captureEditorSnapshot();
     const resourceName = `${source.name.replace(/\.[^.]+$/, "")} - 分离音频`;
@@ -4407,31 +4756,32 @@ export default function LosslessVideoPage() {
     }
 
     const laneId = createEditorId("audio-lane");
-    const trackId = createEditorId("audio");
-    const track: AudioEditorTrack = {
-      id: trackId,
-      sourceId: audioResource.id,
-      laneId,
-      type: "audio",
-      name: resourceName,
-      file: source.file,
-      previewUrl: URL.createObjectURL(source.file),
-      sourceDuration: source.duration,
-      sourceStart: clip.sourceStart,
-      sourceEnd: clip.sourceEnd,
-      audioPeaks: [...source.audioPeaks],
-      detachedFromVideoClipId: clip.id,
-      sourceVideoSourceId: source.id,
-      start: clip.start,
-      end: clip.end,
-      enabled: true,
-      volume: clampValue(readVideoClipVolume(clip) || 1, 0, 2),
-      fadeIn: 0,
-      fadeOut: 0,
-      loop: false
-    };
-    const nextTracks = [...tracksRef.current, track];
-    const nextVideoClips = videoClipsRef.current.map((item) => item.id === clip.id
+    const detachedTracks: AudioEditorTrack[] = materialClips
+      .sort((left, right) => left.start - right.start)
+      .map((materialClip) => ({
+        id: createEditorId("audio"),
+        sourceId: audioResource.id,
+        laneId,
+        type: "audio",
+        name: resourceName,
+        file: source.file,
+        previewUrl: audioResource.previewUrl,
+        sourceDuration: source.duration,
+        sourceStart: materialClip.sourceStart,
+        sourceEnd: materialClip.sourceEnd,
+        audioPeaks: [...source.audioPeaks],
+        detachedFromVideoClipId: materialClip.id,
+        sourceVideoSourceId: source.id,
+        start: materialClip.start,
+        end: materialClip.end,
+        enabled: true,
+        volume: clampValue(readVideoClipVolume(materialClip) || 1, 0, 2),
+        fadeIn: 0,
+        fadeOut: 0,
+        loop: false
+      }));
+    const nextTracks = [...tracksRef.current, ...detachedTracks];
+    const nextVideoClips = videoClipsRef.current.map((item) => materialClipIds.has(item.id)
       ? { ...item, volume: 0, audioDetached: true }
       : item);
     tracksRef.current = nextTracks;
@@ -4453,7 +4803,8 @@ export default function LosslessVideoPage() {
 
     setSelectedResourceId("");
     setSelectedVideoClipId("");
-    setSelectedTrackId(trackId);
+    setSelectedVideoClipIds([]);
+    setSelectedTrackId(detachedTracks[0].id);
     setSelectedEffectId("");
     setSelectedLaneId(laneId);
     setSelectedKeyframeId("");
@@ -4466,17 +4817,48 @@ export default function LosslessVideoPage() {
   const removeBgmFromTimelineMaterial = async (target: { kind: "video"; id: string } | { kind: "audio"; id: string }) => {
     if (taskRunning) return;
     const videoClip = target.kind === "video" ? videoClipsRef.current.find((clip) => clip.id === target.id) : undefined;
+    const videoTargetClips = videoClip?.mergeGroupId
+      ? videoClipsRef.current
+          .filter((clip) => clip.mergeGroupId === videoClip.mergeGroupId)
+          .sort((left, right) => left.start - right.start)
+      : videoClip ? [videoClip] : [];
+    const videoTargetClipIds = new Set(videoTargetClips.map((clip) => clip.id));
+    const existingAttachedTracks = tracksRef.current.filter((track): track is AudioEditorTrack =>
+      track.type === "audio"
+      && Boolean(track.attachedToVideoClipId && videoTargetClipIds.has(track.attachedToVideoClipId)));
+    const legacyBgmTracks = tracksRef.current.filter((track): track is AudioEditorTrack =>
+      track.type === "audio"
+      && Boolean(track.detachedFromVideoClipId && videoTargetClipIds.has(track.detachedFromVideoClipId))
+      && /去(?:除)?\s*bgm/i.test(track.name));
     const videoSource = videoClip ? videoSourcesRef.current.find((source) => source.id === videoClip.sourceId) : undefined;
     const audioTrack = target.kind === "audio"
       ? tracksRef.current.find((track): track is AudioEditorTrack => track.id === target.id && track.type === "audio")
       : undefined;
-    if (target.kind === "video" && (!videoClip || !videoSource?.hasAudio || videoClip.audioDetached)) return;
+    const hasExplicitlySeparatedAudio = videoTargetClips.some((clip) =>
+      clip.audioDetached
+      && !existingAttachedTracks.some((track) => track.attachedToVideoClipId === clip.id)
+      && !legacyBgmTracks.some((track) => track.detachedFromVideoClipId === clip.id));
+    if (target.kind === "video" && (!videoClip || !videoSource?.hasAudio || hasExplicitlySeparatedAudio)) return;
     if (target.kind === "audio" && !audioTrack) return;
+    if (videoClip && videoTargetClips.some((clip) => clip.sourceId !== videoClip.sourceId)) {
+      notify({
+        type: "warning",
+        title: "暂不能统一去除 BGM",
+        message: "该复合素材包含多个不同的源视频，请先分别处理声音后再合并。"
+      });
+      return;
+    }
 
     const sourceFile = videoSource?.file || audioTrack!.file;
-    const sourceStart = videoClip?.sourceStart ?? audioTrack!.sourceStart;
-    const sourceEnd = videoClip?.sourceEnd ?? audioTrack!.sourceEnd;
-    const sourceName = videoClip?.name || audioTrack!.name;
+    const sourceStart = videoClip
+      ? Math.min(...videoTargetClips.map((clip) => clip.sourceStart))
+      : audioTrack!.sourceStart;
+    const sourceEnd = videoClip
+      ? Math.max(...videoTargetClips.map((clip) => clip.sourceEnd))
+      : audioTrack!.sourceEnd;
+    const sourceName = videoClip
+      ? `${videoClip.name}${videoTargetClips.length > 1 ? ` · 合并 ${videoTargetClips.length} 段` : ""}`
+      : audioTrack!.name;
     const historySnapshot = captureEditorSnapshot();
     const nextTaskId = createVideoTaskId();
     setTaskId(nextTaskId);
@@ -4535,42 +4917,55 @@ export default function LosslessVideoPage() {
         file: outputFile,
         previewUrl,
         duration: outputDuration,
-        audioPeaks: outputPeaks
+        audioPeaks: outputPeaks,
+        internal: Boolean(videoClip)
       };
       const nextResources = [...mediaResourcesRef.current, outputResource];
       mediaResourcesRef.current = nextResources;
       setMediaResources(nextResources);
 
       if (videoClip) {
-        const currentClip = videoClipsRef.current.find((clip) => clip.id === videoClip.id);
-        if (!currentClip) throw new Error("视频素材已不存在，请重新处理");
-        const clipDuration = currentClip.end - currentClip.start;
-        const trackDuration = Math.min(clipDuration, outputDuration);
-        const laneId = createEditorId("audio-lane");
-        const trackId = createEditorId("audio");
-        const processedTrack: AudioEditorTrack = {
-          id: trackId,
-          sourceId: resourceId,
-          laneId,
-          type: "audio",
-          name: outputName,
-          file: outputFile,
-          previewUrl,
-          sourceDuration: outputDuration,
-          sourceStart: 0,
-          sourceEnd: trackDuration,
-          audioPeaks: outputPeaks,
-          start: currentClip.start,
-          end: currentClip.start + trackDuration,
-          enabled: true,
-          volume: readVideoClipVolume(currentClip),
-          fadeIn: 0,
-          fadeOut: 0,
-          loop: false
-        };
-        const nextTracks = [...tracksRef.current, processedTrack];
-        const nextVideoClips = videoClipsRef.current.map((clip) => clip.id === currentClip.id
-          ? { ...clip, volume: 0, audioDetached: true }
+        const currentClips = videoClipsRef.current
+          .filter((clip) => videoTargetClipIds.has(clip.id))
+          .sort((left, right) => left.start - right.start);
+        if (currentClips.length !== videoTargetClips.length) throw new Error("视频素材已发生变化，请重新处理");
+        const processedTracks: AudioEditorTrack[] = currentClips.map((currentClip) => {
+          const trackSourceStart = clampValue(currentClip.sourceStart - sourceStart, 0, outputDuration);
+          const trackSourceEnd = clampValue(currentClip.sourceEnd - sourceStart, trackSourceStart, outputDuration);
+          return {
+            id: createEditorId("audio"),
+            sourceId: resourceId,
+            laneId: currentClip.laneId,
+            type: "audio",
+            name: outputName,
+            file: outputFile,
+            previewUrl,
+            sourceDuration: outputDuration,
+            sourceStart: trackSourceStart,
+            sourceEnd: trackSourceEnd,
+            audioPeaks: outputPeaks,
+            attachedToVideoClipId: currentClip.id,
+            start: currentClip.start,
+            end: currentClip.end,
+            enabled: true,
+            volume: readVideoClipVolume(currentClip),
+            fadeIn: 0,
+            fadeOut: 0,
+            loop: false
+          };
+        });
+        const replacedTrackIds = new Set([...existingAttachedTracks, ...legacyBgmTracks].map((track) => track.id));
+        const replacedSourceIds = new Set([...existingAttachedTracks, ...legacyBgmTracks].map((track) => track.sourceId));
+        const nextTracks = [
+          ...tracksRef.current.filter((track) => !replacedTrackIds.has(track.id)),
+          ...processedTracks
+        ];
+        const nextResources = mediaResourcesRef.current.filter((resource) =>
+          !replacedSourceIds.has(resource.id) || nextTracks.some((track) => track.sourceId === resource.id));
+        mediaResourcesRef.current = nextResources;
+        setMediaResources(nextResources);
+        const nextVideoClips = videoClipsRef.current.map((clip) => videoTargetClipIds.has(clip.id)
+          ? { ...clip, audioDetached: true }
           : clip);
         tracksRef.current = nextTracks;
         videoClipsRef.current = nextVideoClips;
@@ -4582,14 +4977,13 @@ export default function LosslessVideoPage() {
           nextTracks,
           effectsRef.current,
           subtitleTracksRef.current
-        ).filter((lane) => lane !== laneId);
-        const sourceLaneIndex = nextLaneOrder.indexOf(currentClip.laneId);
-        nextLaneOrder.splice(sourceLaneIndex >= 0 ? sourceLaneIndex + 1 : nextLaneOrder.length, 0, laneId);
+        );
         timelineLaneOrderRef.current = nextLaneOrder;
         setTimelineLaneOrder(nextLaneOrder);
-        setSelectedVideoClipId("");
-        setSelectedTrackId(trackId);
-        setSelectedLaneId(laneId);
+        setSelectedVideoClipId(currentClips[0].id);
+        setSelectedVideoClipIds(currentClips.map((clip) => clip.id));
+        setSelectedTrackId("");
+        setSelectedLaneId(currentClips[0].laneId);
       } else if (audioTrack) {
         const trackDuration = Math.min(audioTrack.end - audioTrack.start, outputDuration);
         const nextTracks = tracksRef.current.map((track) => track.id === audioTrack.id && track.type === "audio"
@@ -4628,7 +5022,13 @@ export default function LosslessVideoPage() {
         message: response.message || current.message
       } : current);
       setStatus("done");
-      setProgress({ percent: 100, label: "去除 BGM 完成", detail: `${outputName} 已加入时间轴` });
+      setProgress({
+        percent: 100,
+        label: "去除 BGM 完成",
+        detail: videoClip
+          ? `处理后的声音已绑定到${videoTargetClips.length > 1 ? "整个复合" : "原"}视频素材`
+          : `${outputName} 已替换原音频素材`
+      });
       window.requestAnimationFrame(() => seekPreview(currentTimeRef.current, false, false));
     } catch (processingError) {
       const cancelled = abortRef.current?.signal.aborted;
@@ -4647,32 +5047,135 @@ export default function LosslessVideoPage() {
     const clip = videoClipsRef.current.find((item) => item.id === clipId);
     if (!clip) return;
     const historySnapshot = captureEditorSnapshot();
+    const removedClipIds = new Set(
+      (clip.mergeGroupId
+        ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+        : [clip]).map((item) => item.id)
+    );
     const nextClips = videoClipsRef.current
-      .filter((item) => item.id !== clip.id)
+      .filter((item) => !removedClipIds.has(item.id))
       .sort((left, right) => left.start - right.start);
+    const removedAttachedTracks = tracksRef.current.filter((track): track is AudioEditorTrack =>
+      track.type === "audio" && Boolean(track.attachedToVideoClipId && removedClipIds.has(track.attachedToVideoClipId)));
+    const nextTracks = tracksRef.current.filter((track) =>
+      track.type !== "audio" || !track.attachedToVideoClipId || !removedClipIds.has(track.attachedToVideoClipId));
+    const removedSourceIds = new Set(removedAttachedTracks.map((track) => track.sourceId));
+    const orphanedSourceIds = new Set(
+      [...removedSourceIds].filter((sourceId) => !nextTracks.some((track) => track.sourceId === sourceId))
+    );
+    removedAttachedTracks.forEach((track) => {
+      audioPreviewRefs.current.get(track.id)?.pause();
+      audioPreviewRefs.current.delete(track.id);
+    });
+    if (orphanedSourceIds.size) {
+      const nextResources = mediaResourcesRef.current.filter((resource) =>
+        resource.type !== "audio" || !resource.internal || !orphanedSourceIds.has(resource.id));
+      mediaResourcesRef.current = nextResources;
+      setMediaResources(nextResources);
+    }
     videoClipsRef.current = nextClips;
+    tracksRef.current = nextTracks;
     setVideoClips(nextClips);
-    commitSubtitleTracks(subtitleTracksRef.current.filter((track) => track.linkedVideoClipId !== clip.id));
-    const nextLaneOrder = mergeTimelineLaneOrder(timelineLaneOrderRef.current, nextClips, tracksRef.current, effectsRef.current, subtitleTracksRef.current);
+    setTracks(nextTracks);
+    commitSubtitleTracks(subtitleTracksRef.current.filter((track) =>
+      !track.linkedVideoClipId || !removedClipIds.has(track.linkedVideoClipId)));
+    const nextLaneOrder = mergeTimelineLaneOrder(timelineLaneOrderRef.current, nextClips, nextTracks, effectsRef.current, subtitleTracksRef.current);
     timelineLaneOrderRef.current = nextLaneOrder;
     setTimelineLaneOrder(nextLaneOrder);
     setSelectedVideoClipId("");
+    setSelectedVideoClipIds([]);
     setSelectedKeyframeId("");
-    if (activeVideoClipIdRef.current === clip.id) {
+    if (removedClipIds.has(activeVideoClipIdRef.current)) {
       videoRef.current?.pause();
       activeVideoClipIdRef.current = "";
       setActiveVideoClipId("");
     }
     pushEditorHistory(historySnapshot);
     resetResult();
-    seekPreview(Math.min(currentTime, getTimelineProjectDuration(nextClips, tracksRef.current, subtitleTracksRef.current)), false);
+    seekPreview(Math.min(currentTime, getTimelineProjectDuration(nextClips, nextTracks, subtitleTracksRef.current)), false);
+  };
+
+  const mergeSelectedVideoClips = () => {
+    const clips = mergeableVideoClips(videoClipsRef.current, selectedVideoClipIds);
+    if (clips.length < 2) {
+      notify({
+        type: "warning",
+        title: "无法合并片段",
+        message: "请选择同一轨道中的两个或更多视频片段。"
+      });
+      return;
+    }
+
+    const historySnapshot = captureEditorSnapshot();
+    const collapsible = collapsibleVideoClips(videoClipsRef.current, selectedVideoClipIds);
+    if (collapsible.length < 2) {
+      const mergeGroupId = createEditorId("video-merge");
+      const mergedIds = new Set(clips.map((clip) => clip.id));
+      const nextClips = videoClipsRef.current.map((clip) => mergedIds.has(clip.id)
+        ? { ...clip, mergeGroupId }
+        : clip);
+      videoClipsRef.current = nextClips;
+      setVideoClips(nextClips);
+      setSelectedVideoClipId(clips[0].id);
+      setSelectedVideoClipIds(clips.map((clip) => clip.id));
+      setSelectedLaneId(clips[0].laneId);
+      setSelectedKeyframeId("");
+      pushEditorHistory(historySnapshot);
+      return;
+    }
+
+    const first = collapsible[0];
+    const last = collapsible[collapsible.length - 1];
+    const merged: VideoEditorClip = {
+      ...cloneVideoEditorClip(first),
+      end: last.end,
+      sourceEnd: last.sourceEnd,
+      sourceMin: first.sourceMin ?? first.sourceStart,
+      sourceMax: last.sourceMax ?? last.sourceEnd,
+      mergeGroupId: undefined
+    };
+    const mergedIds = new Set(collapsible.map((clip) => clip.id));
+    const nextClips = videoClipsRef.current
+      .flatMap((clip) => clip.id === first.id ? [merged] : mergedIds.has(clip.id) ? [] : [clip])
+      .sort((left, right) => left.start - right.start);
+    videoClipsRef.current = nextClips;
+    setVideoClips(nextClips);
+    commitSubtitleTracks(subtitleTracksRef.current.map((track) => track.linkedVideoClipId && mergedIds.has(track.linkedVideoClipId)
+      ? { ...track, linkedVideoClipId: merged.id }
+      : track));
+    if (mergedIds.has(activeVideoClipIdRef.current)) {
+      activeVideoClipIdRef.current = merged.id;
+      setActiveVideoClipId(merged.id);
+    }
+    setSelectedVideoClipId(merged.id);
+    setSelectedVideoClipIds([merged.id]);
+    setSelectedLaneId(merged.laneId);
+    setSelectedKeyframeId("");
+    pushEditorHistory(historySnapshot);
+    resetResult();
+    seekPreview(clampValue(currentTimeRef.current, merged.start, merged.end), false, false);
+  };
+
+  const unmergeSelectedVideoClips = () => {
+    const clips = mergeableVideoClips(videoClipsRef.current, selectedVideoClipIds);
+    const mergeGroupId = clips[0]?.mergeGroupId;
+    if (!mergeGroupId || clips.some((clip) => clip.mergeGroupId !== mergeGroupId)) return;
+    const historySnapshot = captureEditorSnapshot();
+    const nextClips = videoClipsRef.current.map((clip) => clip.mergeGroupId === mergeGroupId
+      ? { ...clip, mergeGroupId: undefined }
+      : clip);
+    videoClipsRef.current = nextClips;
+    setVideoClips(nextClips);
+    setSelectedVideoClipId(clips[0].id);
+    setSelectedVideoClipIds(clips.map((clip) => clip.id));
+    pushEditorHistory(historySnapshot);
   };
 
   const appendMediaClips = (media: PendingEditorMedia[], requestedStart = currentTime, requestedLaneId = "") => {
     if (!media.length) return;
     const type = media[0].type;
     const hadVisualTrack = videoClipsRef.current.length > 0 || tracksRef.current.some((track) => track.type === "image");
-    const insertionStart = Math.max(0, requestedStart);
+    const insertionStart = roundTimelineFrame(requestedStart);
     const timelineEnd = Number.POSITIVE_INFINITY;
     const nextTracks = [...tracksRef.current];
     const selectedClip = nextTracks.find((track) => track.id === selectedTrackId);
@@ -4893,11 +5396,13 @@ export default function LosslessVideoPage() {
     if (taskRunning) return;
     const historySnapshot = captureEditorSnapshot();
     const removedVideoClips = videoClipsRef.current.filter((clip) => clip.sourceId === resource.id);
-    const removedTracks = tracksRef.current.filter((track) => track.sourceId === resource.id);
     const removedVideoClipIds = new Set(removedVideoClips.map((clip) => clip.id));
+    const removedTracks = tracksRef.current.filter((track) =>
+      track.sourceId === resource.id
+      || (track.type === "audio" && Boolean(track.attachedToVideoClipId && removedVideoClipIds.has(track.attachedToVideoClipId))));
     const removedTrackIds = new Set(removedTracks.map((track) => track.id));
     const nextClips = videoClipsRef.current.filter((clip) => clip.sourceId !== resource.id);
-    const nextTracks = tracksRef.current.filter((track) => track.sourceId !== resource.id);
+    const nextTracks = tracksRef.current.filter((track) => !removedTrackIds.has(track.id));
     removedTracks.forEach((track) => {
       audioPreviewRefs.current.get(track.id)?.pause();
       audioPreviewRefs.current.delete(track.id);
@@ -4932,6 +5437,18 @@ export default function LosslessVideoPage() {
       setVideoFile(nextPrimarySource?.file || null);
       setVideoInput(nextPrimarySource ? createInputFromFile(nextPrimarySource.file) : null);
       setDuration(nextPrimarySource?.duration || 0);
+      const removedInternalSourceIds = new Set(
+        removedTracks
+          .filter((track): track is AudioEditorTrack => track.type === "audio" && Boolean(track.attachedToVideoClipId))
+          .map((track) => track.sourceId)
+          .filter((sourceId) => !nextTracks.some((track) => track.sourceId === sourceId))
+      );
+      if (removedInternalSourceIds.size) {
+        const nextResources = mediaResourcesRef.current.filter((item) =>
+          item.type !== "audio" || !item.internal || !removedInternalSourceIds.has(item.id));
+        mediaResourcesRef.current = nextResources;
+        setMediaResources(nextResources);
+      }
     } else {
       const nextResources = mediaResourcesRef.current.filter((item) => item.id !== resource.id);
       mediaResourcesRef.current = nextResources;
@@ -4958,7 +5475,7 @@ export default function LosslessVideoPage() {
     event.preventDefault();
     event.stopPropagation();
     const menuWidth = 120;
-    const menuHeight = target.kind === "video-clip" ? 160 : target.kind === "track" ? 130 : target.kind === "subtitle-cue" ? 102 : 66;
+    const menuHeight = target.kind === "video-clip" ? 206 : target.kind === "track" ? 130 : target.kind === "subtitle-cue" ? 102 : 66;
     setMediaContextMenu({
       x: clampValue(event.clientX, 6, Math.max(6, window.innerWidth - menuWidth - 6)),
       y: clampValue(event.clientY, 6, Math.max(6, window.innerHeight - menuHeight - 6)),
@@ -4994,7 +5511,7 @@ export default function LosslessVideoPage() {
       setDuration(promotedSource.duration);
     }
 
-    const insertionTime = Math.max(0, requestedTime);
+    const insertionTime = roundTimelineFrame(requestedTime);
     const insertionDuration = source.duration;
     const videoLaneIds = Array.from(new Set(videoClipsRef.current.map((clip) => clip.laneId)));
     const selectedLaneIsVideo = videoClipsRef.current.some((clip) => clip.laneId === selectedLaneId);
@@ -5141,10 +5658,21 @@ export default function LosslessVideoPage() {
     const historySnapshot = captureEditorSnapshot();
     setTimelineDropActive(false);
     const rect = event.currentTarget.getBoundingClientRect();
-    const dropTime = clampValue(
+    const rawDropTime = clampValue(
       ((event.clientX - rect.left) / Math.max(1, rect.width)) * timelineDisplayDuration,
       0,
       timelineDisplayDuration
+    );
+    const dropSnapThreshold = timelineSnapDistancePx / Math.max(1, rect.width) * timelineDisplayDuration;
+    const dropTime = snapTimelineValue(
+      rawDropTime,
+      [
+        0,
+        currentTimeRef.current,
+        ...videoClipsRef.current.flatMap((clip) => [clip.start, clip.end]),
+        ...tracksRef.current.flatMap((track) => [track.start, track.end])
+      ],
+      dropSnapThreshold
     );
     const generatedLaneId = createEditorId(`${resource.type}-lane`);
     const laneDrop = resolveTimelineLanePlacement(event.clientY, resource.type, generatedLaneId);
@@ -5196,7 +5724,7 @@ export default function LosslessVideoPage() {
   };
 
   const applyVideoPreviewGain = (video: HTMLVideoElement, clip: VideoEditorClip, muted = isMuted) => {
-    const volume = readVideoClipVolume(clip);
+    const volume = clip.audioDetached ? 0 : readVideoClipVolume(clip);
     const graph = videoAudioGraphRef.current;
     if (graph?.element === video) {
       video.volume = 1;
@@ -5212,13 +5740,35 @@ export default function LosslessVideoPage() {
   const updateVideoClipVolume = (clipId: string, requestedVolume: number, recordHistory = false) => {
     const volume = clampValue(Number.isFinite(requestedVolume) ? requestedVolume : 1, 0, 10);
     const clip = videoClipsRef.current.find((item) => item.id === clipId);
-    if (!clip || Math.abs(readVideoClipVolume(clip) - volume) < 0.0001) return false;
+    if (!clip) return false;
+    const targetClipIds = new Set(
+      (clip.mergeGroupId
+        ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+        : [clip]).map((item) => item.id)
+    );
+    if ([...targetClipIds].every((id) => {
+      const targetClip = videoClipsRef.current.find((item) => item.id === id);
+      return targetClip && Math.abs(readVideoClipVolume(targetClip) - volume) < 0.0001;
+    })) return false;
     const historySnapshot = recordHistory ? captureEditorSnapshot() : undefined;
-    const updatedClip = { ...clip, volume };
-    const nextClips = videoClipsRef.current.map((item) => item.id === clipId ? updatedClip : item);
+    const nextClips = videoClipsRef.current.map((item) => targetClipIds.has(item.id) ? { ...item, volume } : item);
+    const nextTracks = tracksRef.current.map((track) =>
+      track.type === "audio" && Boolean(track.attachedToVideoClipId && targetClipIds.has(track.attachedToVideoClipId))
+        ? { ...track, volume }
+        : track);
     videoClipsRef.current = nextClips;
+    tracksRef.current = nextTracks;
     setVideoClips(nextClips);
-    if (activeVideoClipIdRef.current === clipId && videoRef.current) applyVideoPreviewGain(videoRef.current, updatedClip);
+    setTracks(nextTracks);
+    const activeUpdatedClip = nextClips.find((item) => item.id === activeVideoClipIdRef.current);
+    if (activeUpdatedClip && targetClipIds.has(activeUpdatedClip.id) && videoRef.current) {
+      applyVideoPreviewGain(videoRef.current, activeUpdatedClip);
+    }
+    nextTracks.forEach((track) => {
+      if (track.type !== "audio" || !track.attachedToVideoClipId || !targetClipIds.has(track.attachedToVideoClipId)) return;
+      const audio = audioPreviewRefs.current.get(track.id);
+      if (audio) audio.volume = clampValue(isMuted ? 0 : volume, 0, 1);
+    });
     if (historySnapshot) pushEditorHistory(historySnapshot);
     return true;
   };
@@ -5243,6 +5793,11 @@ export default function LosslessVideoPage() {
   ) => {
     const clip = videoClipsRef.current.find((item) => item.id === clipId);
     if (!clip) return false;
+    const targetClipIds = new Set(
+      (clip.mergeGroupId
+        ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+        : [clip]).map((item) => item.id)
+    );
     const historySnapshot = recordHistory ? captureEditorSnapshot() : undefined;
     const nextColor = normalizeVideoColor(updater(readVideoColor(clip)));
     const nextClip: VideoEditorClip = {
@@ -5250,7 +5805,9 @@ export default function LosslessVideoPage() {
       color: videoColorIsDefault(nextColor) ? undefined : nextColor
     };
     if (JSON.stringify(clip.color || defaultVideoColor) === JSON.stringify(nextClip.color || defaultVideoColor)) return false;
-    const nextClips = videoClipsRef.current.map((item) => item.id === clipId ? nextClip : item);
+    const nextClips = videoClipsRef.current.map((item) => targetClipIds.has(item.id)
+      ? { ...item, color: nextClip.color ? cloneVideoColor(nextClip.color) : undefined }
+      : item);
     videoClipsRef.current = nextClips;
     setVideoClips(nextClips);
     if (historySnapshot) pushEditorHistory(historySnapshot);
@@ -5268,8 +5825,15 @@ export default function LosslessVideoPage() {
   };
 
   const resetVideoClipColor = (clipId: string) => {
+    const clip = videoClipsRef.current.find((item) => item.id === clipId);
+    if (!clip) return;
+    const targetClipIds = new Set(
+      (clip.mergeGroupId
+        ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+        : [clip]).map((item) => item.id)
+    );
     const historySnapshot = captureEditorSnapshot();
-    const nextClips = videoClipsRef.current.map((clip) => clip.id === clipId ? { ...clip, color: undefined } : clip);
+    const nextClips = videoClipsRef.current.map((item) => targetClipIds.has(item.id) ? { ...item, color: undefined } : item);
     videoClipsRef.current = nextClips;
     setVideoClips(nextClips);
     pushEditorHistory(historySnapshot);
@@ -5288,6 +5852,9 @@ export default function LosslessVideoPage() {
     let animationFrame = 0;
     setSelectedResourceId("");
     setSelectedVideoClipId(clip.id);
+    setSelectedVideoClipIds(clip.mergeGroupId
+      ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId).map((item) => item.id)
+      : [clip.id]);
     setSelectedTrackId("");
     setSelectedEffectId("");
     setSelectedLaneId(clip.laneId);
@@ -5808,6 +6375,7 @@ export default function LosslessVideoPage() {
         trackDragMovedRef.current = true;
       }
       const deltaTime = (moveEvent.clientX - startClientX) / Math.max(1, contentRect.width) * timelineDisplayDuration;
+      const snapThreshold = timelineSnapDistancePx / Math.max(1, contentRect.width) * timelineDisplayDuration;
       let targetLaneId = originalLaneId;
       let laneDrop: TimelineLaneDrop = {
         laneId: originalLaneId,
@@ -5824,9 +6392,21 @@ export default function LosslessVideoPage() {
         );
         targetLaneId = laneDrop.laneId;
       }
+      const snapTargets = (laneId: string) => [
+        0,
+        currentTimeRef.current,
+        ...baseEffects
+          .filter((item) => item.id !== effect.id && (item.laneId || effectLaneId) === laneId)
+          .flatMap((item) => [item.start, item.end])
+      ];
       changed = updateEffect(effect.id, (current) => {
         if (action === "move") {
-          let start = roundTimelineFrame(clampValue(effect.start + deltaTime, 0, Math.max(0, projectVideoDuration - effectDuration)));
+          let start = snapTimelineClipStart(
+            clampValue(effect.start + deltaTime, 0, Math.max(0, projectVideoDuration - effectDuration)),
+            effectDuration,
+            snapTargets(targetLaneId),
+            snapThreshold
+          );
           let end = start + effectDuration;
           const overlapsTargetLane = () => baseEffects.some((item) => item.id !== effect.id
             && (item.laneId || effectLaneId) === targetLaneId
@@ -5835,6 +6415,13 @@ export default function LosslessVideoPage() {
           if (targetLaneId !== originalLaneId && overlapsTargetLane()) {
             laneDrop = { laneId: generatedLaneId, insertionIndex: laneDrop.insertionIndex, kind: "create" };
             targetLaneId = generatedLaneId;
+            start = snapTimelineClipStart(
+              clampValue(effect.start + deltaTime, 0, Math.max(0, projectVideoDuration - effectDuration)),
+              effectDuration,
+              snapTargets(targetLaneId),
+              snapThreshold
+            );
+            end = start + effectDuration;
           }
           if (targetLaneId === originalLaneId) {
             const maximumStart = Math.max(laneBounds.minimumStart, laneBounds.maximumEnd - effectDuration);
@@ -5863,12 +6450,20 @@ export default function LosslessVideoPage() {
         if (action === "trim-start") {
           return {
             ...current,
-            start: roundTimelineFrame(clampValue(effect.start + deltaTime, laneBounds.minimumStart, effect.end - minimumTimelineClipDuration))
+            start: clampValue(
+              snapTimelineValue(effect.start + deltaTime, snapTargets(originalLaneId), snapThreshold),
+              laneBounds.minimumStart,
+              effect.end - minimumTimelineClipDuration
+            )
           };
         }
         return {
           ...current,
-          end: roundTimelineFrame(clampValue(effect.end + deltaTime, effect.start + minimumTimelineClipDuration, laneBounds.maximumEnd))
+          end: clampValue(
+            snapTimelineValue(effect.end + deltaTime, snapTargets(originalLaneId), snapThreshold),
+            effect.start + minimumTimelineClipDuration,
+            laneBounds.maximumEnd
+          )
         };
       }) || changed;
       const currentEffect = effectsRef.current.find((item) => item.id === effect.id);
@@ -6091,7 +6686,12 @@ export default function LosslessVideoPage() {
       splitAudioTrackAtTime(audioTrack, splitTime, { selectRight: false });
       return;
     }
-    const clip = videoClipsRef.current.find((item) => item.id === selectedVideoClipId);
+    const selectedClip = videoClipsRef.current.find((item) => item.id === selectedVideoClipId);
+    const selectedMaterialClips = selectedClip?.mergeGroupId
+      ? videoClipsRef.current.filter((item) => item.mergeGroupId === selectedClip.mergeGroupId)
+      : selectedClip ? [selectedClip] : [];
+    const clip = selectedMaterialClips.find((item) =>
+      splitTime > item.start + 1 / timelineFps && splitTime < item.end - 1 / timelineFps);
     if (clip) splitVideoClipAtTime(clip, splitTime, { selectRight: false });
   };
 
@@ -6132,8 +6732,13 @@ export default function LosslessVideoPage() {
   };
 
   const selectVideoClipAtPointer = (event: ReactMouseEvent<HTMLElement>, clip: VideoEditorClip) => {
+    const materialClips = clip.mergeGroupId
+      ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+      : [clip];
+    const clipIds = materialClips.map((item) => item.id);
     setSelectedResourceId("");
     setSelectedVideoClipId(clip.id);
+    setSelectedVideoClipIds(clipIds);
     setSelectedTrackId("");
     setSelectedEffectId("");
     setSelectedLaneId(clip.laneId);
@@ -6143,7 +6748,92 @@ export default function LosslessVideoPage() {
       trackDragMovedRef.current = false;
       return;
     }
-    seekPreview(clampValue(timelineTimeAtPointer(event.currentTarget, event.clientX), clip.start, clip.end), false);
+    seekPreview(clampValue(
+      timelineTimeAtPointer(event.currentTarget, event.clientX),
+      Math.min(...materialClips.map((item) => item.start)),
+      Math.max(...materialClips.map((item) => item.end))
+    ), false);
+  };
+
+  const startVideoLaneMarquee = (event: ReactPointerEvent<HTMLDivElement>, lane: TimelineLane) => {
+    if (event.button !== 0 || taskRunning || timelineTool !== "select" || lane.type !== "video") return;
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMediaContextMenu(null);
+    setSelectedResourceId("");
+    setSelectedTrackId("");
+    setSelectedEffectId("");
+    setSelectedSubtitleTrackId("");
+    setSelectedSubtitleCueId("");
+    setSelectedKeyframeId("");
+    setSelectedLaneId(lane.id);
+    setInspectorTab("tracks");
+
+    const row = event.currentTarget;
+    const rowRect = row.getBoundingClientRect();
+    const startX = clampValue(event.clientX - rowRect.left, 0, rowRect.width);
+    const marquee = timelineMarqueeRef.current;
+    let moved = false;
+    let pendingClientX = event.clientX;
+    let animationFrame = 0;
+
+    setSelectedVideoClipId("");
+    setSelectedVideoClipIds([]);
+    if (marquee) {
+      marquee.style.display = "block";
+      marquee.style.left = `${startX}px`;
+      marquee.style.top = `${row.offsetTop + 2}px`;
+      marquee.style.width = "0px";
+      marquee.style.height = `${Math.max(1, row.offsetHeight - 4)}px`;
+    }
+
+    const applySelection = (clientX: number) => {
+      const currentX = clampValue(clientX - rowRect.left, 0, rowRect.width);
+      const left = Math.min(startX, currentX);
+      const right = Math.max(startX, currentX);
+      moved = moved || Math.abs(currentX - startX) > 2;
+      if (marquee) {
+        marquee.style.left = `${left}px`;
+        marquee.style.width = `${Math.max(1, right - left)}px`;
+      }
+      const selected = moved
+        ? lane.videoClips.filter((clip) => {
+            const clipLeft = clip.start / timelineDisplayDuration * rowRect.width;
+            const clipRight = clip.end / timelineDisplayDuration * rowRect.width;
+            return clipRight >= left && clipLeft <= right;
+          })
+        : [];
+      const selectedGroupIds = new Set(selected.map((clip) => clip.mergeGroupId).filter(Boolean));
+      const ids = lane.videoClips
+        .filter((clip) => selected.includes(clip) || Boolean(clip.mergeGroupId && selectedGroupIds.has(clip.mergeGroupId)))
+        .map((clip) => clip.id);
+      setSelectedVideoClipIds((current) => current.length === ids.length && current.every((id, index) => id === ids[index]) ? current : ids);
+      setSelectedVideoClipId(ids[0] || "");
+    };
+    const move = (moveEvent: PointerEvent) => {
+      pendingClientX = moveEvent.clientX;
+      if (animationFrame) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        applySelection(pendingClientX);
+      });
+    };
+    const finish = (finishEvent?: PointerEvent) => {
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      applySelection(finishEvent?.clientX ?? pendingClientX);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", pointerUp);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cancel);
+      if (marquee) marquee.style.display = "none";
+    };
+    const pointerUp = (upEvent: PointerEvent) => finish(upEvent);
+    const cancel = () => finish();
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", pointerUp, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
+    window.addEventListener("blur", cancel, { once: true });
   };
 
   const startVideoClipTimelineDrag = (
@@ -6178,14 +6868,24 @@ export default function LosslessVideoPage() {
     const trimBoundaryTolerance = 2 / timelineFps;
     const followTrimStart = action === "trim-start" && Math.abs(playheadAtDragStart - originalStart) <= trimBoundaryTolerance;
     const followTrimEnd = action === "trim-end" && Math.abs(playheadAtDragStart - originalEnd) <= trimBoundaryTolerance;
-    const clipDuration = originalEnd - originalStart;
     const baseClips = videoClipsRef.current;
+    const baseTracks = tracksRef.current;
+    const movingGroupClips = action === "move" && clip.mergeGroupId
+      ? baseClips.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+      : [clip];
+    const movingClipIds = new Set(movingGroupClips.map((item) => item.id));
+    const movingGroupStart = Math.min(...movingGroupClips.map((item) => item.start));
+    const movingGroupEnd = Math.max(...movingGroupClips.map((item) => item.end));
+    const movingGroupDuration = movingGroupEnd - movingGroupStart;
     const generatedLaneId = createEditorId("video-lane");
     let pendingMove: PointerEvent | null = null;
     let animationFrame = 0;
     trackDragMovedRef.current = false;
     setSelectedResourceId("");
     setSelectedVideoClipId(clip.id);
+    setSelectedVideoClipIds(clip.mergeGroupId
+      ? baseClips.filter((item) => item.mergeGroupId === clip.mergeGroupId).map((item) => item.id)
+      : [clip.id]);
     setSelectedTrackId("");
     setSelectedEffectId("");
     setSelectedLaneId(clip.laneId);
@@ -6221,7 +6921,7 @@ export default function LosslessVideoPage() {
         );
         nextLaneId = laneDrop.laneId;
       }
-      const laneClips = (laneId: string) => baseClips.filter((item) => item.id !== clip.id && item.laneId === laneId);
+      const laneClips = (laneId: string) => baseClips.filter((item) => !movingClipIds.has(item.id) && item.laneId === laneId);
       const snapTargets = (laneId: string) => [
         0,
         currentTime,
@@ -6230,22 +6930,46 @@ export default function LosslessVideoPage() {
       let updatedClip = clip;
 
       if (action === "move") {
-        let start = snapTimelineClipStart(Math.max(0, originalStart + timeDelta), clipDuration, snapTargets(nextLaneId), snapThreshold);
-        let end = start + clipDuration;
-        const overlapsTargetLane = () => laneClips(nextLaneId).some((item) => start < item.end - 0.001 && end > item.start + 0.001);
+        let groupStart = snapTimelineClipStart(
+          Math.max(0, movingGroupStart + timeDelta),
+          movingGroupDuration,
+          snapTargets(nextLaneId),
+          snapThreshold
+        );
+        let start = originalStart + groupStart - movingGroupStart;
+        let end = originalEnd + groupStart - movingGroupStart;
+        const groupDelta = () => groupStart - movingGroupStart;
+        const overlapsTargetLane = () => laneClips(nextLaneId).some((item) => movingGroupClips.some((movingClip) => {
+          const movingStart = movingClip.start + groupDelta();
+          const movingEnd = movingClip.end + groupDelta();
+          return movingStart < item.end - 0.001 && movingEnd > item.start + 0.001;
+        }));
         if (nextLaneId !== clip.laneId && overlapsTargetLane()) {
           laneDrop = { laneId: generatedLaneId, insertionIndex: laneDrop.insertionIndex, kind: "create" };
           nextLaneId = laneDrop.laneId;
-          start = snapTimelineClipStart(Math.max(0, originalStart + timeDelta), clipDuration, snapTargets(nextLaneId), snapThreshold);
-          end = start + clipDuration;
+          groupStart = snapTimelineClipStart(
+            Math.max(0, movingGroupStart + timeDelta),
+            movingGroupDuration,
+            snapTargets(nextLaneId),
+            snapThreshold
+          );
+          start = originalStart + groupStart - movingGroupStart;
+          end = originalEnd + groupStart - movingGroupStart;
         }
         if (nextLaneId === clip.laneId) {
-          const bounds = getVideoClipLaneBounds(baseClips, clip);
-          const maximumStart = Number.isFinite(bounds.maximumEnd)
-            ? Math.max(bounds.minimumStart, bounds.maximumEnd - clipDuration)
+          const otherLaneClips = laneClips(clip.laneId);
+          const previousEnd = otherLaneClips
+            .filter((item) => item.end <= movingGroupStart + 0.001)
+            .reduce((maximum, item) => Math.max(maximum, item.end), 0);
+          const nextStart = otherLaneClips
+            .filter((item) => item.start >= movingGroupEnd - 0.001)
+            .reduce((minimum, item) => Math.min(minimum, item.start), Number.POSITIVE_INFINITY);
+          const maximumGroupStart = Number.isFinite(nextStart)
+            ? nextStart - movingGroupDuration
             : Number.POSITIVE_INFINITY;
-          start = clampValue(start, bounds.minimumStart, maximumStart);
-          end = start + clipDuration;
+          groupStart = clampValue(groupStart, previousEnd, maximumGroupStart);
+          start = originalStart + groupStart - movingGroupStart;
+          end = originalEnd + groupStart - movingGroupStart;
         } else if (overlapsTargetLane()) {
           return;
         }
@@ -6295,13 +7019,43 @@ export default function LosslessVideoPage() {
         && Math.abs(updatedClip.sourceStart - clip.sourceStart) < 0.0001
         && Math.abs(updatedClip.sourceEnd - clip.sourceEnd) < 0.0001
       ) return;
+      const moveDelta = updatedClip.start - originalStart;
       const next = baseClips
-        .map((item) => item.id === clip.id ? updatedClip : item)
+        .map((item) => item.id === clip.id
+          ? updatedClip
+          : action === "move" && movingClipIds.has(item.id)
+            ? { ...item, laneId: updatedClip.laneId, start: item.start + moveDelta, end: item.end + moveDelta }
+            : item)
         .sort((left, right) => left.start - right.start);
+      const baseClipById = new Map(baseClips.map((item) => [item.id, item]));
+      const nextClipById = new Map(next.map((item) => [item.id, item]));
+      const nextTracks = baseTracks.map((track) => {
+        if (track.type !== "audio" || !track.attachedToVideoClipId) return track;
+        const before = baseClipById.get(track.attachedToVideoClipId);
+        const after = nextClipById.get(track.attachedToVideoClipId);
+        if (!before || !after || before === after) return track;
+        const moved = action === "move";
+        const sourceStart = moved
+          ? track.sourceStart
+          : clampValue(track.sourceStart + after.start - before.start, 0, track.sourceDuration);
+        const sourceEnd = moved
+          ? track.sourceEnd
+          : clampValue(track.sourceEnd + after.end - before.end, sourceStart, track.sourceDuration);
+        return {
+          ...track,
+          laneId: after.laneId,
+          start: after.start,
+          end: after.end,
+          sourceStart,
+          sourceEnd
+        };
+      });
       videoClipsRef.current = next;
+      tracksRef.current = nextTracks;
       setVideoClips(next);
+      setTracks(nextTracks);
       const linkedSubtitleTracks = historySnapshot.subtitleTracks.map((subtitleTrack) => {
-        if (subtitleTrack.linkedVideoClipId !== clip.id) return subtitleTrack;
+        if (!subtitleTrack.linkedVideoClipId || !movingClipIds.has(subtitleTrack.linkedVideoClipId)) return subtitleTrack;
         if (action === "move") {
           const delta = updatedClip.start - originalStart;
           return {
@@ -6328,7 +7082,7 @@ export default function LosslessVideoPage() {
       });
       commitSubtitleTracks(linkedSubtitleTracks);
       setSelectedLaneId(updatedClip.laneId);
-      const nextProjectDuration = getTimelineProjectDuration(next, tracksRef.current, subtitleTracksRef.current);
+      const nextProjectDuration = getTimelineProjectDuration(next, nextTracks, subtitleTracksRef.current);
       let nextPlayhead = Math.min(currentTimeRef.current, nextProjectDuration);
       if (action === "trim-start") {
         const playheadWasTrimmed = playheadAtDragStart >= originalStart - trimBoundaryTolerance
@@ -6482,6 +7236,7 @@ export default function LosslessVideoPage() {
       const pixelDelta = moveEvent.clientX - pointerStart;
       if (Math.abs(pixelDelta) > 2 || Math.abs(moveEvent.clientY - pointerStartY) > 2) trackDragMovedRef.current = true;
       const timeDelta = (pixelDelta / Math.max(1, rowRect.width)) * timelineDisplayDuration;
+      const snapThreshold = timelineSnapDistancePx / Math.max(1, rowRect.width) * timelineDisplayDuration;
       let targetLaneId = originalLaneId;
       let laneDrop: TimelineLaneDrop = {
         laneId: originalLaneId,
@@ -6499,7 +7254,19 @@ export default function LosslessVideoPage() {
           moveEvent.clientY - pointerStartY
         );
         targetLaneId = laneDrop.laneId;
-        proposedStart = clampValue(originalStart + timeDelta, 0, Math.max(0, maxDuration - trackDuration));
+        const snapTargets = [
+          0,
+          currentTimeRef.current,
+          ...baseTracks
+            .filter((item) => item.id !== track.id && getTrackLaneId(item) === targetLaneId)
+            .flatMap((item) => [item.start, item.end])
+        ];
+        proposedStart = snapTimelineClipStart(
+          clampValue(originalStart + timeDelta, 0, Math.max(0, maxDuration - trackDuration)),
+          trackDuration,
+          snapTargets,
+          snapThreshold
+        );
         proposedEnd = proposedStart + trackDuration;
         const overlapsTargetLane = baseTracks.some((item) => item.id !== track.id
           && getTrackLaneId(item) === targetLaneId
@@ -6521,13 +7288,12 @@ export default function LosslessVideoPage() {
       let updatedTrack: EditorTrack = track;
       if (action === "move") {
         if (targetLaneId === originalLaneId) {
-          const delta = clampValue(
-            timeDelta,
-            laneBounds.minimumStart - originalStart,
-            Math.max(laneBounds.minimumStart - originalStart, laneBounds.maximumEnd - originalEnd)
+          proposedStart = clampValue(
+            proposedStart,
+            laneBounds.minimumStart,
+            Math.max(laneBounds.minimumStart, laneBounds.maximumEnd - trackDuration)
           );
-          proposedStart = originalStart + delta;
-          proposedEnd = originalEnd + delta;
+          proposedEnd = proposedStart + trackDuration;
         }
         const delta = proposedStart - originalStart;
         updatedTrack = track.type === "image"
@@ -6544,7 +7310,15 @@ export default function LosslessVideoPage() {
         const minimumStart = track.type === "audio" && !track.loop
           ? Math.max(laneBounds.minimumStart, originalStart - track.sourceStart)
           : laneBounds.minimumStart;
-        const start = clampValue(originalStart + timeDelta, minimumStart, originalEnd - 0.05);
+        const start = clampValue(
+          snapTimelineValue(
+            originalStart + timeDelta,
+            [0, currentTimeRef.current, ...baseTracks.filter((item) => item.id !== track.id && getTrackLaneId(item) === originalLaneId).flatMap((item) => [item.start, item.end])],
+            snapThreshold
+          ),
+          minimumStart,
+          originalEnd - 0.05
+        );
         updatedTrack = track.type === "audio"
           ? {
               ...track,
@@ -6561,7 +7335,15 @@ export default function LosslessVideoPage() {
         const maximumEnd = track.type === "audio" && !track.loop
           ? Math.min(laneBounds.maximumEnd, originalEnd + (track.sourceDuration - track.sourceEnd))
           : laneBounds.maximumEnd;
-        const end = clampValue(originalEnd + timeDelta, originalStart + 0.05, maximumEnd);
+        const end = clampValue(
+          snapTimelineValue(
+            originalEnd + timeDelta,
+            [0, currentTimeRef.current, ...baseTracks.filter((item) => item.id !== track.id && getTrackLaneId(item) === originalLaneId).flatMap((item) => [item.start, item.end])],
+            snapThreshold
+          ),
+          originalStart + 0.05,
+          maximumEnd
+        );
         updatedTrack = track.type === "audio"
           ? {
               ...track,
@@ -6930,6 +7712,11 @@ export default function LosslessVideoPage() {
     if (!layer) return;
 
     const historySnapshot = captureEditorSnapshot();
+    const targetClipIds = new Set(
+      (clip.mergeGroupId
+        ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+        : [clip]).map((item) => item.id)
+    );
     const video = videoRef.current;
     video?.pause();
     audioPreviewRefs.current.forEach((audio) => audio.pause());
@@ -6937,6 +7724,7 @@ export default function LosslessVideoPage() {
     setIsPlaying(false);
     setSelectedResourceId("");
     setSelectedVideoClipId(clip.id);
+    setSelectedVideoClipIds([...targetClipIds]);
     setSelectedTrackId("");
     setSelectedEffectId("");
     setSelectedKeyframeId("");
@@ -7041,7 +7829,7 @@ export default function LosslessVideoPage() {
       document.body.style.cursor = previousCursor;
       clearCanvasSnapGuides();
       if (!moved) return;
-      const nextClips = videoClipsRef.current.map((item) => item.id === clip.id
+      const nextClips = videoClipsRef.current.map((item) => targetClipIds.has(item.id)
         ? { ...item, transform: { ...latestTransform, customized: true } }
         : item);
       videoClipsRef.current = nextClips;
@@ -7062,9 +7850,14 @@ export default function LosslessVideoPage() {
     event.preventDefault();
     event.stopPropagation();
     const historySnapshot = captureEditorSnapshot();
+    const targetClipIds = new Set(
+      (clip.mergeGroupId
+        ? videoClipsRef.current.filter((item) => item.mergeGroupId === clip.mergeGroupId)
+        : [clip]).map((item) => item.id)
+    );
     const sourceSize = { width: source.width, height: source.height };
     const nextTransform = createDefaultVideoTransform(sourceSize, videoSize);
-    const nextClips = videoClipsRef.current.map((item) => item.id === clip.id
+    const nextClips = videoClipsRef.current.map((item) => targetClipIds.has(item.id)
       ? { ...item, transform: nextTransform }
       : item);
     videoClipsRef.current = nextClips;
@@ -7501,7 +8294,7 @@ export default function LosslessVideoPage() {
               sourceStart: clip.sourceStart,
               sourceEnd: clip.sourceEnd,
               primary: Boolean(source?.primary),
-              volume: readVideoClipVolume(clip),
+              volume: clip.audioDetached ? 0 : readVideoClipVolume(clip),
               transform: transform
                 ? { x: transform.x, y: transform.y, width: transform.width }
                 : undefined,
@@ -7527,9 +8320,9 @@ export default function LosslessVideoPage() {
           density: 0,
           seed: trackIndex * 10000 + cueIndex + 1,
           mask: {
-            x: style.x,
-            y: style.position,
-            width: style.width,
+            x: style.backgroundX,
+            y: style.backgroundY,
+            width: style.backgroundWidth,
             height: subtitleBackgroundHeightPercent(cue.text, style, videoSize.width, videoSize.height)
           }
         }));
@@ -7695,9 +8488,10 @@ export default function LosslessVideoPage() {
     isPlayingRef.current = false;
     setIsPlaying(false);
 
+    const nextVideoPiecesByOriginalClipId = new Map<string, VideoEditorClip[]>();
     const nextVideoClips = videoClipsRef.current.flatMap((clip) => {
       const pieces = timelineRangePieces(clip.start, clip.end, ranges);
-      return pieces.map((piece, index) => {
+      const nextPieces = pieces.map((piece, index) => {
         const sourceStart = clip.sourceStart + piece.start - clip.start;
         const sourceEnd = clip.sourceStart + piece.end - clip.start;
         return {
@@ -7711,6 +8505,8 @@ export default function LosslessVideoPage() {
           sourceMax: piece.end < clip.end - 0.001 ? sourceEnd : clip.sourceMax
         };
       });
+      nextVideoPiecesByOriginalClipId.set(clip.id, nextPieces);
+      return nextPieces;
     }).sort((left, right) => left.start - right.start || left.end - right.end);
 
     const nextTracks = tracksRef.current.flatMap((track): EditorTrack[] => {
@@ -7720,16 +8516,25 @@ export default function LosslessVideoPage() {
         return pieces.map((piece, index) => {
           const sourceStart = clampValue(track.sourceStart + piece.start - track.start, track.sourceStart, track.sourceEnd);
           const sourceEnd = clampValue(track.sourceStart + piece.end - track.start, sourceStart, track.sourceEnd);
+          const shiftedStart = roundTimelineFrame(timelineTimeAfterRemovals(piece.start, ranges));
+          const shiftedEnd = roundTimelineFrame(timelineTimeAfterRemovals(piece.end, ranges));
+          const linkedVideoPieces = track.attachedToVideoClipId
+            ? nextVideoPiecesByOriginalClipId.get(track.attachedToVideoClipId)
+            : undefined;
+          const attachedVideoClip = linkedVideoPieces?.find((videoPiece) =>
+            shiftedStart < videoPiece.end - 0.001 && shiftedEnd > videoPiece.start + 0.001)
+            || linkedVideoPieces?.[Math.min(index, Math.max(0, linkedVideoPieces.length - 1))];
           return {
             ...track,
             id: index === 0 ? track.id : createEditorId("audio"),
-            start: roundTimelineFrame(timelineTimeAfterRemovals(piece.start, ranges)),
-            end: roundTimelineFrame(timelineTimeAfterRemovals(piece.end, ranges)),
+            start: shiftedStart,
+            end: shiftedEnd,
             sourceStart,
             sourceEnd,
             fadeIn: piece.start <= track.start + 0.001 ? track.fadeIn : 0,
             fadeOut: piece.end >= track.end - 0.001 ? track.fadeOut : 0,
-            detachedFromVideoClipId: undefined
+            detachedFromVideoClipId: track.attachedToVideoClipId ? track.detachedFromVideoClipId : undefined,
+            attachedToVideoClipId: attachedVideoClip?.id
           };
         });
       }
@@ -8244,7 +9049,35 @@ export default function LosslessVideoPage() {
   const contextMenuVideoSource = contextMenuVideoClip
     ? videoSources.find((source) => source.id === contextMenuVideoClip.sourceId)
     : undefined;
-  const contextMenuAudioSeparated = Boolean(contextMenuVideoClip?.audioDetached);
+  const contextMenuVideoMaterialClips = contextMenuVideoClip?.mergeGroupId
+    ? videoClips.filter((clip) => clip.mergeGroupId === contextMenuVideoClip.mergeGroupId)
+    : contextMenuVideoClip ? [contextMenuVideoClip] : [];
+  const contextMenuVideoSelection = contextMenuVideoClip && selectedVideoClipIds.includes(contextMenuVideoClip.id)
+    ? mergeableVideoClips(videoClips, selectedVideoClipIds)
+    : [];
+  const canContextMenuMergeVideo = contextMenuVideoSelection.length > 1;
+  const contextMenuMergeGroupId = contextMenuVideoSelection[0]?.mergeGroupId;
+  const canContextMenuUnmergeVideo = Boolean(
+    contextMenuMergeGroupId
+    && contextMenuVideoSelection.every((clip) => clip.mergeGroupId === contextMenuMergeGroupId)
+  );
+  const contextMenuAttachedAudioTracks = contextMenuVideoMaterialClips.flatMap((clip) => {
+    const attached = tracks.find((track): track is AudioEditorTrack =>
+      track.type === "audio" && track.attachedToVideoClipId === clip.id);
+    return attached ? [attached] : [];
+  });
+  const contextMenuLegacyBgmTracks = tracks.filter((track): track is AudioEditorTrack =>
+    track.type === "audio"
+    && Boolean(track.detachedFromVideoClipId && contextMenuVideoMaterialClips.some((clip) => clip.id === track.detachedFromVideoClipId))
+    && /去(?:除)?\s*bgm/i.test(track.name));
+  const contextMenuAudioSeparated = contextMenuVideoMaterialClips.some((clip) =>
+    clip.audioDetached
+    && !contextMenuAttachedAudioTracks.some((track) => track.attachedToVideoClipId === clip.id)
+    && !contextMenuLegacyBgmTracks.some((track) => track.detachedFromVideoClipId === clip.id));
+  const contextMenuBgmProcessed = Boolean(
+    contextMenuVideoMaterialClips.length
+    && contextMenuAttachedAudioTracks.length === contextMenuVideoMaterialClips.length
+  );
   const contextMenuTrack = contextMenuTarget?.kind === "track"
     ? tracks.find((track) => track.id === contextMenuTarget.trackId)
     : undefined;
@@ -8265,13 +9098,18 @@ export default function LosslessVideoPage() {
     && contextMenuSubtitleTime > contextMenuSubtitleCue.start + minimumTimelineClipDuration
     && contextMenuSubtitleTime < contextMenuSubtitleCue.end - minimumTimelineClipDuration
   );
-  const contextMenuSplitTime = contextMenuTarget?.kind === "video-clip" && contextMenuVideoClip
-    ? roundTimelineFrame(clampValue(contextMenuTarget.time, contextMenuVideoClip.start, contextMenuVideoClip.end))
+  const contextMenuSplitClip = contextMenuTarget?.kind === "video-clip" && contextMenuVideoClip
+    ? contextMenuVideoMaterialClips.find((clip) =>
+        contextMenuTarget.time > clip.start + minimumTimelineClipDuration
+        && contextMenuTarget.time < clip.end - minimumTimelineClipDuration)
+    : undefined;
+  const contextMenuSplitTime = contextMenuTarget?.kind === "video-clip" && contextMenuSplitClip
+    ? roundTimelineFrame(clampValue(contextMenuTarget.time, contextMenuSplitClip.start, contextMenuSplitClip.end))
     : 0;
   const canContextMenuSplit = Boolean(
-    contextMenuVideoClip
-    && contextMenuSplitTime > contextMenuVideoClip.start + minimumTimelineClipDuration
-    && contextMenuSplitTime < contextMenuVideoClip.end - minimumTimelineClipDuration
+    contextMenuSplitClip
+    && contextMenuSplitTime > contextMenuSplitClip.start + minimumTimelineClipDuration
+    && contextMenuSplitTime < contextMenuSplitClip.end - minimumTimelineClipDuration
   );
   const contextMenuTrackSplitTime = contextMenuTarget?.kind === "track" && contextMenuTrack?.type === "audio"
     ? roundTimelineFrame(clampValue(contextMenuTarget.time, contextMenuTrack.start, contextMenuTrack.end))
@@ -8366,7 +9204,9 @@ export default function LosslessVideoPage() {
           <div className="lossless-file-chip" title={importedResources.map((resource) => resource.name).join("\n")}>
             <FileVideo size={16} />
             <strong>{importedResources.length ? `${importedResources.length} 个已导入资源` : "未导入资源"}</strong>
-            {videoClips.length + tracks.length + effects.length + subtitleTracks.length > 0 ? <span>{videoClips.length + tracks.length + effects.length + subtitleTracks.length} 个时间轴素材</span> : null}
+            {visibleVideoMaterialCount + visibleTimelineTrackCount + effects.length + subtitleTracks.length > 0
+              ? <span>{visibleVideoMaterialCount + visibleTimelineTrackCount + effects.length + subtitleTracks.length} 个时间轴素材</span>
+              : null}
           </div>
         </header>
 
@@ -8718,8 +9558,59 @@ export default function LosslessVideoPage() {
                           <GlobalEffectPreview key={`${effect.id}-preview`} effect={effect} time={currentTime} />
                         ))}
                         {activeSubtitle && activeSubtitleStyle ? (
+                          <>
+                          {(activeSubtitleStyle.backgroundAlpha > 0
+                            || activeSubtitleStyle.backgroundBlur > 0
+                            || (subtitleCanvasTarget === "background"
+                              && selectedSubtitleTrackId === activeSubtitle.track.id
+                              && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId))) ? (
+                            <div
+                              className={`lossless-subtitle-background-preview ${subtitleCanvasTarget === "background" && selectedSubtitleTrackId === activeSubtitle.track.id && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId) ? "is-selected" : ""}`}
+                              role="button"
+                              tabIndex={0}
+                              title="拖动字幕背景；拖动四角调整区域"
+                              aria-label="调整字幕背景区域"
+                              style={{
+                                left: `${activeSubtitleStyle.backgroundX}%`,
+                                top: `${activeSubtitleStyle.backgroundY}%`,
+                                width: `${activeSubtitleStyle.backgroundWidth}%`,
+                                height: `${activeSubtitleStyle.backgroundHeight}%`,
+                                background: hexColorWithAlpha(activeSubtitleStyle.backgroundColor, activeSubtitleStyle.backgroundAlpha),
+                                backdropFilter: activeSubtitleStyle.backgroundBlur > 0
+                                  ? `blur(${activeSubtitleStyle.backgroundBlur / Math.max(1, videoSize.height) * previewVideoRect.height}px)`
+                                  : "none",
+                                WebkitBackdropFilter: activeSubtitleStyle.backgroundBlur > 0
+                                  ? `blur(${activeSubtitleStyle.backgroundBlur / Math.max(1, videoSize.height) * previewVideoRect.height}px)`
+                                  : "none"
+                              }}
+                              onPointerDown={(event) => startSubtitleBackgroundCanvasTransform(event, activeSubtitle.track, activeSubtitle.cue, "move")}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter" && event.key !== " ") return;
+                                event.preventDefault();
+                                if (selectedSubtitleTrackId !== activeSubtitle.track.id || (selectedSubtitleCueId !== activeSubtitle.cue.id && selectedSubtitleCueId !== allSubtitleCuesSelectionId)) {
+                                  selectSubtitleCue(activeSubtitle.track.id, activeSubtitle.cue.id, false);
+                                }
+                                setSubtitleCanvasTarget("background");
+                              }}
+                            >
+                              {subtitleCanvasTarget === "background"
+                                && selectedSubtitleTrackId === activeSubtitle.track.id
+                                && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId)
+                                ? effectMaskResizeHandles.map((handle) => (
+                                    <button
+                                      className={`lossless-local-effect-resize is-${handle}`}
+                                      type="button"
+                                      key={handle}
+                                      title="调整字幕背景区域"
+                                      aria-label={`从 ${handle} 角调整字幕背景区域`}
+                                      onPointerDown={(event) => startSubtitleBackgroundCanvasTransform(event, activeSubtitle.track, activeSubtitle.cue, `resize-${handle}`)}
+                                    />
+                                  ))
+                                : null}
+                            </div>
+                          ) : null}
                           <div
-                            className={`lossless-subtitle-preview ${selectedSubtitleTrackId === activeSubtitle.track.id && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId) ? "is-selected" : ""}`}
+                            className={`lossless-subtitle-preview ${subtitleCanvasTarget === "text" && selectedSubtitleTrackId === activeSubtitle.track.id && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId) ? "is-selected" : ""} ${subtitleCanvasTarget === "background" ? "is-background-editing" : ""}`}
                             role="button"
                             tabIndex={0}
                             title="拖动字幕；拖动四角缩放"
@@ -8750,18 +9641,11 @@ export default function LosslessVideoPage() {
                               textAlign: activeSubtitleStyle.alignment,
                               WebkitTextFillColor: activeSubtitleStyle.color,
                               WebkitTextStroke: `${Math.max(0, activeSubtitleStyle.outlineWidth / Math.max(1, videoSize.height) * previewVideoRect.height)}px ${activeSubtitleStyle.outlineColor}`,
-                              paintOrder: "stroke fill",
-                              background: hexColorWithAlpha(activeSubtitleStyle.backgroundColor, activeSubtitleStyle.backgroundAlpha),
-                              backdropFilter: activeSubtitleStyle.backgroundBlur > 0
-                                ? `blur(${activeSubtitleStyle.backgroundBlur / Math.max(1, videoSize.height) * previewVideoRect.height}px)`
-                                : "none",
-                              WebkitBackdropFilter: activeSubtitleStyle.backgroundBlur > 0
-                                ? `blur(${activeSubtitleStyle.backgroundBlur / Math.max(1, videoSize.height) * previewVideoRect.height}px)`
-                                : "none"
+                              paintOrder: "stroke fill"
                             }}
                           >
                             {layoutSubtitleForCanvas(activeSubtitle.cue.text, activeSubtitleStyle, videoSize.width)}
-                            {selectedSubtitleTrackId === activeSubtitle.track.id && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId) ? subtitleResizeHandles.map((handle) => (
+                            {subtitleCanvasTarget === "text" && selectedSubtitleTrackId === activeSubtitle.track.id && (selectedSubtitleCueId === activeSubtitle.cue.id || selectedSubtitleCueId === allSubtitleCuesSelectionId) ? subtitleResizeHandles.map((handle) => (
                               <button
                                 className={`lossless-subtitle-transform-handle is-${handle}`}
                                 type="button"
@@ -8772,6 +9656,7 @@ export default function LosslessVideoPage() {
                               />
                             )) : null}
                           </div>
+                          </>
                         ) : null}
                       </div>
                     </>
@@ -9085,6 +9970,7 @@ export default function LosslessVideoPage() {
                       </div>
                       <div ref={timelineLaneDropIndicatorRef} className="lossless-lane-drop-indicator" aria-hidden="true" />
                       <div ref={timelineBladeGuideRef} className="lossless-blade-guide" aria-hidden="true" />
+                      <div ref={timelineMarqueeRef} className="lossless-timeline-marquee" aria-hidden="true" />
                       <div className="lossless-candidate-track">
                         {segments.map((segment, index) => {
                           const start = segment.deleteStart ?? segment.secondStart;
@@ -9112,6 +9998,10 @@ export default function LosslessVideoPage() {
                           data-lane-type={lane.type}
                           aria-label={`${lane.type === "effect" ? "特效" : lane.type === "video" ? "视频" : lane.type === "audio" ? "音频" : lane.type === "subtitle" ? "字幕" : "图片"}轨道，${lane.type === "effect" ? lane.effects.length : lane.type === "video" ? lane.videoClips.length : lane.type === "subtitle" ? lane.subtitleCues.length : lane.clips.length} 个素材`}
                           onPointerDown={(event) => {
+                            if (lane.type === "video" && event.target === event.currentTarget && timelineTool === "select") {
+                              startVideoLaneMarquee(event, lane);
+                              return;
+                            }
                             setSelectedLaneId(lane.id);
                             if (event.target === event.currentTarget) {
                               setSelectedVideoClipId("");
@@ -9256,22 +10146,49 @@ export default function LosslessVideoPage() {
                               />
                             </button>
                           );
-                        }) : lane.type === "video" ? lane.videoClips.map((clip) => {
-                          const source = videoSources.find((item) => item.id === clip.sourceId);
+                        }) : lane.type === "video" ? timelineVideoMaterials(lane.videoClips).map((material) => {
+                          const clip = material.first;
+                          const processedAudioTracks = material.clips.flatMap((materialClip) => {
+                            const processedAudio = tracks.find((track): track is AudioEditorTrack =>
+                              track.type === "audio" && track.attachedToVideoClipId === materialClip.id);
+                            return processedAudio ? [processedAudio] : [];
+                          });
                           const clipVolume = readVideoClipVolume(clip);
-                          const clipAudioPeaks = source ? audioPeaksForVideoClip(source, clip) : [];
-                          const hasAttachedAudio = Boolean(source?.hasAudio && !clip.audioDetached);
+                          const clipAudioPeaks = material.clips.flatMap((materialClip) => {
+                            const processedAudio = processedAudioTracks.find((track) =>
+                              track.attachedToVideoClipId === materialClip.id);
+                            if (processedAudio) {
+                              return audioPeaksForSourceRange(
+                                processedAudio.audioPeaks,
+                                processedAudio.sourceDuration,
+                                processedAudio.sourceStart,
+                                processedAudio.sourceEnd
+                              );
+                            }
+                            const source = videoSources.find((item) => item.id === materialClip.sourceId);
+                            return source?.hasAudio && !materialClip.audioDetached
+                              ? audioPeaksForVideoClip(source, materialClip)
+                              : [];
+                          });
+                          const hasAttachedAudio = material.clips.some((materialClip) => {
+                            const source = videoSources.find((item) => item.id === materialClip.sourceId);
+                            return processedAudioTracks.some((track) => track.attachedToVideoClipId === materialClip.id)
+                              || Boolean(source?.hasAudio && !materialClip.audioDetached);
+                          });
+                          const materialSelected = material.clips.some((materialClip) => selectedVideoClipIds.includes(materialClip.id));
                           return (
                           <button
-                            className={`lossless-media-track-clip is-video-clip ${hasAttachedAudio ? "has-embedded-audio" : ""} ${selectedVideoClipId === clip.id ? "is-selected" : ""}`}
+                            className={`lossless-media-track-clip is-video-clip ${material.clips.length > 1 ? "is-compound" : ""} ${hasAttachedAudio ? "has-embedded-audio" : ""} ${materialSelected ? "is-selected" : ""}`}
                             type="button"
-                            key={`${clip.id}-timeline`}
-                            aria-pressed={selectedVideoClipId === clip.id}
+                            key={`${material.id}-timeline`}
+                            aria-pressed={materialSelected}
                             style={{
-                              left: `${(clip.start / timelineDisplayDuration) * 100}%`,
-                              width: `${Math.max(((clip.end - clip.start) / timelineDisplayDuration) * 100, 0.35)}%`
+                              left: `${(material.start / timelineDisplayDuration) * 100}%`,
+                              width: `${Math.max(((material.end - material.start) / timelineDisplayDuration) * 100, 0)}%`
                             }}
-                            title={timelineTool === "blade" ? `${clip.name} · 刀片切割当前选中的素材` : `${clip.name} · 拖动调整轨道和位置，右键操作`}
+                            title={timelineTool === "blade"
+                              ? `${clip.name} · 刀片切割当前选中的素材`
+                              : `${clip.name}${material.clips.length > 1 ? ` · 已合并 ${material.clips.length} 段` : ""} · 拖动调整轨道和位置，右键操作`}
                             onPointerDown={(event) => {
                               if (event.button !== 0) return;
                               if (timelineTool === "blade") return;
@@ -9288,7 +10205,10 @@ export default function LosslessVideoPage() {
                             onContextMenu={(event) => {
                               hideTimelineBladeGuide();
                               setSelectedResourceId("");
-                              setSelectedVideoClipId(clip.id);
+                              if (!materialSelected) {
+                                setSelectedVideoClipId(clip.id);
+                                setSelectedVideoClipIds(material.clips.map((item) => item.id));
+                              }
                               setSelectedTrackId("");
                               setSelectedEffectId("");
                               setSelectedLaneId(clip.laneId);
@@ -9310,11 +10230,11 @@ export default function LosslessVideoPage() {
                             />
                             <FileVideo size={13} />
                             <span>{clip.name}</span>
-                            <small className="lossless-media-track-duration">{formatCompactDuration(clip.end - clip.start)}</small>
+                            <small className="lossless-media-track-duration">{formatCompactDuration(material.end - material.start)}</small>
                             {hasAttachedAudio ? (
                               <span
                                 className="lossless-video-audio-strip"
-                                title={`视频原声 ${formatVideoGainDb(clipVolume)}，上下拖动调整`}
+                                title={`${processedAudioTracks.length ? "处理后声音" : "视频原声"} ${formatVideoGainDb(clipVolume)}，上下拖动调整`}
                                 onPointerDown={(event) => startVideoClipVolumeDrag(event, clip)}
                                 onClick={(event) => {
                                   event.preventDefault();
@@ -9335,7 +10255,7 @@ export default function LosslessVideoPage() {
                               title="调整出点"
                               onPointerDown={(event) => {
                                 event.stopPropagation();
-                                startVideoClipTimelineDrag(event, clip, "trim-end");
+                                startVideoClipTimelineDrag(event, material.last, "trim-end");
                               }}
                             />
                           </button>
@@ -10045,6 +10965,16 @@ export default function LosslessVideoPage() {
                     </div>
                     <div className="lossless-subtitle-property-list is-secondary">
                       <div className="lossless-subtitle-property-row">
+                        <span>画面调整</span>
+                        <SegmentedControl
+                          value={subtitleCanvasTarget}
+                          options={[{ label: "字幕", value: "text" }, { label: "背景框", value: "background" }]}
+                          className="lossless-subtitle-canvas-target"
+                          disabled={!selectedSubtitleTrack}
+                          onChange={setSubtitleCanvasTarget}
+                        />
+                      </div>
+                      <div className="lossless-subtitle-property-row">
                         <span>描边颜色</span>
                         <label className="lossless-subtitle-color-control">
                           <input type="color" value={editableSubtitleStyle.outlineColor} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ outlineColor: event.target.value })} />
@@ -10074,12 +11004,32 @@ export default function LosslessVideoPage() {
                         <input type="number" min={0} max={23} step={1} value={Math.round(editableSubtitleStyle.backgroundBlur)} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundBlur: Number(event.target.value) })} />
                       </div>
                       <div className="lossless-subtitle-property-row is-slider">
-                        <span>水平位置</span>
+                        <span>背景宽度</span>
+                        <EditorRange min={2} max={100} step={0.1} value={editableSubtitleStyle.backgroundWidth} onPointerDown={beginSubtitlePropertyEdit} onPointerUp={finishSubtitlePropertyEdit} onPointerCancel={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundWidth: Number(event.target.value) })} />
+                        <input type="number" min={2} max={100} step={0.1} value={Number(editableSubtitleStyle.backgroundWidth.toFixed(1))} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundWidth: Number(event.target.value) })} />
+                      </div>
+                      <div className="lossless-subtitle-property-row is-slider">
+                        <span>背景高度</span>
+                        <EditorRange min={2} max={100} step={0.1} value={editableSubtitleStyle.backgroundHeight} onPointerDown={beginSubtitlePropertyEdit} onPointerUp={finishSubtitlePropertyEdit} onPointerCancel={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundHeight: Number(event.target.value) })} />
+                        <input type="number" min={2} max={100} step={0.1} value={Number(editableSubtitleStyle.backgroundHeight.toFixed(1))} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundHeight: Number(event.target.value) })} />
+                      </div>
+                      <div className="lossless-subtitle-property-row is-slider">
+                        <span>背景水平</span>
+                        <EditorRange min={0} max={100} step={0.1} value={editableSubtitleStyle.backgroundX} onPointerDown={beginSubtitlePropertyEdit} onPointerUp={finishSubtitlePropertyEdit} onPointerCancel={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundX: Number(event.target.value) })} />
+                        <input type="number" min={0} max={100} step={0.1} value={Number(editableSubtitleStyle.backgroundX.toFixed(1))} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundX: Number(event.target.value) })} />
+                      </div>
+                      <div className="lossless-subtitle-property-row is-slider">
+                        <span>背景垂直</span>
+                        <EditorRange min={0} max={100} step={0.1} value={editableSubtitleStyle.backgroundY} onPointerDown={beginSubtitlePropertyEdit} onPointerUp={finishSubtitlePropertyEdit} onPointerCancel={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundY: Number(event.target.value) })} />
+                        <input type="number" min={0} max={100} step={0.1} value={Number(editableSubtitleStyle.backgroundY.toFixed(1))} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ backgroundY: Number(event.target.value) })} />
+                      </div>
+                      <div className="lossless-subtitle-property-row is-slider">
+                        <span>字幕水平</span>
                         <EditorRange min={0} max={100} step={0.1} value={editableSubtitleStyle.x} onPointerDown={beginSubtitlePropertyEdit} onPointerUp={finishSubtitlePropertyEdit} onPointerCancel={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ x: Number(event.target.value) })} />
                         <input type="number" min={0} max={100} step={0.1} value={Number(editableSubtitleStyle.x.toFixed(1))} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ x: Number(event.target.value) })} />
                       </div>
                       <div className="lossless-subtitle-property-row is-slider">
-                        <span>垂直位置</span>
+                        <span>字幕垂直</span>
                         <EditorRange min={0} max={100} step={0.1} value={editableSubtitleStyle.position} onPointerDown={beginSubtitlePropertyEdit} onPointerUp={finishSubtitlePropertyEdit} onPointerCancel={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ position: Number(event.target.value) })} />
                         <input type="number" min={0} max={100} step={0.1} value={Number(editableSubtitleStyle.position.toFixed(1))} onFocus={beginSubtitlePropertyEdit} onBlur={finishSubtitlePropertyEdit} onChange={(event) => updateSelectedSubtitleStyle({ position: Number(event.target.value) })} />
                       </div>
@@ -10350,7 +11300,7 @@ export default function LosslessVideoPage() {
                       ) : (
                         <div>
                           <ImageIcon size={25} />
-                          <span>{videoCover?.mode === "frame" ? "导出时生成当前画面" : "尚未设置视频封面"}</span>
+                          <span>{videoCover?.mode === "frame" ? "导出时生成当前画面" : "使用时间轴首帧"}</span>
                         </div>
                       )}
                     </div>
@@ -10382,7 +11332,9 @@ export default function LosslessVideoPage() {
                     <dl><dt>视频时长</dt><dd>保持不变</dd></dl>
                     <dl><dt>声音时间</dt><dd>保持不变</dd></dl>
                     <p className="lossless-cover-note">
-                      封面会替换导出视频的第一帧，不会插入额外时长或移动声音。修改实际画面需要对视频轨进行一次高质量编码。
+                      {videoCover
+                        ? "封面会替换导出视频的第一帧，不会插入额外时长或移动声音。修改实际画面需要对视频轨进行一次高质量编码。"
+                        : "未设置封面时直接使用时间轴 0 秒处的视频画面；只有 0 秒处没有视频素材时才会输出黑场。"}
                     </p>
                   </section>
                 </div>
@@ -10439,7 +11391,13 @@ export default function LosslessVideoPage() {
                       <dl><dt>字幕</dt><dd>{enabledSubtitleTracks.length ? `${enabledSubtitleTracks.reduce((count, track) => count + track.cues.length, 0)} 条 · 自动烧录` : "无"}</dd></dl>
                       <dl>
                         <dt>视频封面</dt>
-                        <dd>{videoCover ? videoCover.mode === "frame" ? `当前画面 ${formatTimelineTimecode(clampValue(videoCover.time, 0, projectVideoDuration), timelineFps)}` : "上传图片" : "未设置"}</dd>
+                        <dd>{videoCover
+                          ? videoCover.mode === "frame"
+                            ? `当前画面 ${formatTimelineTimecode(clampValue(videoCover.time, 0, projectVideoDuration), timelineFps)}`
+                            : "上传图片"
+                          : videoClips.some((clip) => clip.start <= 0.5 / timelineFps && clip.end > 0)
+                            ? "时间轴首帧"
+                            : "黑场（0 秒无视频）"}</dd>
                       </dl>
                       <dl><dt>封装格式</dt><dd>MP4</dd></dl>
                     </section>
@@ -10659,6 +11617,27 @@ export default function LosslessVideoPage() {
               </>
             ) : contextMenuVideoClip ? (
               <>
+                {selectedVideoClipIds.length > 1 ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    title={canContextMenuUnmergeVideo
+                      ? `取消合并 ${contextMenuVideoSelection.length} 个视频片段`
+                      : canContextMenuMergeVideo
+                        ? `非破坏式合并选中的 ${contextMenuVideoSelection.length} 个视频片段`
+                        : "仅支持合并同一轨道中的视频片段"}
+                    aria-label={canContextMenuUnmergeVideo ? "取消合并" : "合并片段"}
+                    disabled={!canContextMenuMergeVideo || taskRunning}
+                    onClick={() => {
+                      setMediaContextMenu(null);
+                      if (canContextMenuUnmergeVideo) unmergeSelectedVideoClips();
+                      else mergeSelectedVideoClips();
+                    }}
+                  >
+                    {canContextMenuUnmergeVideo ? <Unlink2 size={14} /> : <Combine size={14} />}
+                    <span>{canContextMenuUnmergeVideo ? "取消合并" : "合并片段"}</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   role="menuitem"
@@ -10667,7 +11646,7 @@ export default function LosslessVideoPage() {
                   disabled={!canContextMenuSplit}
                   onClick={() => {
                     setMediaContextMenu(null);
-                    splitVideoClipAtTime(contextMenuVideoClip, contextMenuSplitTime);
+                    if (contextMenuSplitClip) splitVideoClipAtTime(contextMenuSplitClip, contextMenuSplitTime);
                   }}
                 >
                   <Scissors size={14} />
@@ -10693,16 +11672,22 @@ export default function LosslessVideoPage() {
                   <button
                     type="button"
                     role="menuitem"
-                    title={contextMenuAudioSeparated ? "请对已分离的音频素材执行去除 BGM" : "按声音设置处理此视频片段并生成可编辑音轨"}
-                    aria-label="去除 BGM"
-                    disabled={contextMenuAudioSeparated || taskRunning}
+                    title={contextMenuBgmProcessed
+                      ? "该视频素材已使用处理后的声音"
+                      : contextMenuAudioSeparated
+                        ? "请对已分离的音频素材执行去除 BGM"
+                        : contextMenuLegacyBgmTracks.length
+                          ? "重新处理整个复合素材，并收回旧的独立 BGM 音轨"
+                          : "去除 BGM 并将处理后的声音保留在当前视频素材内"}
+                    aria-label={contextMenuBgmProcessed ? "已去除 BGM" : contextMenuLegacyBgmTracks.length ? "重新去除 BGM" : "去除 BGM"}
+                    disabled={contextMenuBgmProcessed || contextMenuAudioSeparated || taskRunning}
                     onClick={() => {
                       setMediaContextMenu(null);
                       void removeBgmFromTimelineMaterial({ kind: "video", id: contextMenuVideoClip.id });
                     }}
                   >
                     <Music2 size={14} />
-                    <span>去除 BGM</span>
+                    <span>{contextMenuBgmProcessed ? "已去除 BGM" : contextMenuLegacyBgmTracks.length ? "重新去除 BGM" : "去除 BGM"}</span>
                   </button>
                 ) : null}
                 {contextMenuVideoSource?.hasAudio ? (
